@@ -11,4 +11,4 @@ python-docx
 psutil
 flask
 pydub
-pyaudioop
+audioop-lts
