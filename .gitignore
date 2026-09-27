@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.env
+bot.log
+whitelist.json
+intruder_telemetry.json
+usage_stats.json
+tickets.json
+config.json
+whitelist_export.json
+safe_config.json
+jarvis_backup.zip
+auto_backup_*.zip
+replit.nix

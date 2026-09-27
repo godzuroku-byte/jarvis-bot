@@ -1,0 +1,16 @@
+services:
+  - type: worker
+    name: jarvis-bot
+    runtime: python
+    buildCommand: bash build.sh
+    startCommand: python main.py
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: OWNER_ID
+        value: "8988340808"
+      - key: GEMINI_MODEL
+        value: "gemini-2.0-flash"
+    autoDeploy: true

@@ -1,0 +1,11 @@
+python-telegram-bot[job-queue]==21.*
+google-genai
+qrcode[pil]
+pyzbar
+gtts
+Pillow
+requests
+pydub
+pypdf
+python-docx
+psutil
