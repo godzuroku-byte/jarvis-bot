@@ -1,15 +1,7 @@
 """
 ╔══════════════════════════════════════════════════════════════════════╗
 ║                    J.A.R.V.I.S. — CORE SYSTEM                        ║
-║                                                                      ║
-║  Phase 1 │ AI Core             │ Gemini, history, modes, incognito   ║
-║  Phase 2 │ Media & Generation  │ draw, qr, tts, voice, photo, docs   ║
-║  Phase 3 │ Admin & Moderation  │ whitelist, ban, mute, warn, backup  ║
-║  Phase 4 │ Advanced AI         │ review, regex, sql, uml, refactor   ║
-║  Phase 5 │ Special Protocols   │ tickets, stats, health, flood-guard ║
-║                                                                      ║
-║  Framework: python-telegram-bot v21 (async) + Flask keepalive       ║
-║  Locales:   ru, en                                                   ║
+║  Phase 1-5 │ 75 functions │ ru+en │ Render Web Service              ║
 ╚══════════════════════════════════════════════════════════════════════╝
 """
 
@@ -22,16 +14,15 @@ import zipfile
 import logging
 import threading
 import urllib.parse
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from flask import Flask
 
 from telegram import (
     Update, ReplyKeyboardMarkup, KeyboardButton, Poll,
-    InlineKeyboardMarkup, InlineKeyboardButton,
 )
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler,
+    ApplicationBuilder, CommandHandler, MessageHandler,
     filters, ContextTypes, TypeHandler, ApplicationHandlerStop, Application,
 )
 from telegram.constants import ChatMemberStatus, ParseMode, ChatAction
@@ -39,14 +30,22 @@ from telegram.constants import ChatMemberStatus, ParseMode, ChatAction
 from google import genai
 from google.genai import types
 import qrcode
-from pyzbar.pyzbar import decode
+import cv2
+import numpy as np
 from gtts import gTTS
 from PIL import Image
 import requests
+import imageio_ffmpeg
 from pydub import AudioSegment
 from pypdf import PdfReader
 import docx
 import psutil
+
+# Point pydub to the ffmpeg binary provided by imageio-ffmpeg
+try:
+    AudioSegment.converter = imageio_ffmpeg.get_ffmpeg_exe()
+except Exception:
+    pass
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -65,17 +64,17 @@ INTRUDER_FILE = "intruder_telemetry.json"
 STATS_FILE    = "usage_stats.json"
 TICKETS_FILE  = "tickets.json"
 
-BOT_TOKEN       = os.environ.get("BOT_TOKEN")
-GEMINI_API_KEY  = os.environ.get("GEMINI_API_KEY")
-GEMINI_MODEL    = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
-ENV_OWNER_ID    = int(os.environ.get("OWNER_ID", "0"))
+BOT_TOKEN      = os.environ.get("BOT_TOKEN")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+GEMINI_MODEL   = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+ENV_OWNER_ID   = int(os.environ.get("OWNER_ID", "0"))
 
 if not BOT_TOKEN:      raise RuntimeError("BOT_TOKEN is required.")
 if not GEMINI_API_KEY: raise RuntimeError("GEMINI_API_KEY is required.")
 if not ENV_OWNER_ID:   raise RuntimeError("OWNER_ID is required.")
 
-OWNER_ID    = ENV_OWNER_ID
-STARTED_AT  = time.time()
+OWNER_ID   = ENV_OWNER_ID
+STARTED_AT = time.time()
 
 if not os.path.exists(CONFIG_FILE):
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
@@ -88,14 +87,14 @@ with open(CONFIG_FILE, "r", encoding="utf-8") as f:
 # ══════════════════════════════════════════════════════════════════════
 #  GLOBAL STATE
 # ══════════════════════════════════════════════════════════════════════
-USER_HISTORY     = {}   # {uid: [{"role", "parts"}]}
-USER_MODES       = {}   # {uid: "assistant"|"tutor"|...}
-INCOGNITO_USERS  = set()
-LAST_REQUEST     = {}   # {uid: ts}
-FLOOD_WINDOW     = {}   # {uid: [ts, ts, ...]}
-USER_STATS       = {}
-TICKETS          = []
-STOP_WORDS       = ["spam", "scam", "free money", "click here now"]
+USER_HISTORY    = {}
+USER_MODES      = {}
+INCOGNITO_USERS = set()
+LAST_REQUEST    = {}
+FLOOD_WINDOW    = {}
+USER_STATS      = {}
+TICKETS         = []
+STOP_WORDS      = ["spam", "scam", "free money", "click here now"]
 
 state = {
     "WHITELIST":        [],
@@ -107,21 +106,26 @@ state = {
     "LANG":             {},
 }
 
-for path, target in [
-    (DATA_FILE,    state),
-    (STATS_FILE,   USER_STATS),
-    (TICKETS_FILE, TICKETS),
-]:
-    if os.path.exists(path):
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                loaded = json.load(f)
-            if isinstance(target, dict) and path == DATA_FILE:
-                state.update(loaded)
-            else:
-                globals()[path.replace(".json", "").upper().replace("_FILE", "")] = loaded
-        except Exception as e:
-            logger.error(f"Could not load {path}: {e}")
+if os.path.exists(DATA_FILE):
+    try:
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            state.update(json.load(f))
+    except Exception as e:
+        logger.error(f"Could not load {DATA_FILE}: {e}")
+
+if os.path.exists(STATS_FILE):
+    try:
+        with open(STATS_FILE, "r", encoding="utf-8") as f:
+            USER_STATS = json.load(f)
+    except Exception:
+        USER_STATS = {}
+
+if os.path.exists(TICKETS_FILE):
+    try:
+        with open(TICKETS_FILE, "r", encoding="utf-8") as f:
+            TICKETS = json.load(f)
+    except Exception:
+        TICKETS = []
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -131,78 +135,76 @@ LANG = state.get("LANG", {})
 
 TEXTS = {
     "ru": {
-        "welcome_owner":   "🤖 <b>J.A.R.V.I.S.</b> к вашим услугам, сэр.\n\nВсе системы в норме. Введите /help для полного списка команд.",
-        "welcome_other":   "🤖 <b>J.A.R.V.I.S. Online</b>\n\nГотов к работе. Введите /help для списка команд.",
-        "help_title":      "🤖 <b>J.A.R.V.I.S. — Полный список команд</b>",
-        "processing":      "🧠 <i>Обработка…</i>",
-        "slow_down":       "⏳ Помедленнее, сэр.",
-        "gemini_down":     "⚠️ Нейронная сеть временно недоступна.",
-        "req_error":       "⚠️ Ошибка обработки запроса.",
-        "memory_cleared":  "🧹 Память очищена. Контекст сброшен.",
-        "unknown_mode":    "❌ Неизвестный режим. Используйте /help.",
-        "mode_switched":   "✅ Режим переключён на: <b>{mode}</b>.",
-        "mode_current":    "🎭 Текущий режим: <b>{cur}</b>\n\nДоступные: {modes}",
-        "incog_on":        "🕶 Режим инкогнито <b>ВКЛЮЧЁН</b>. История не сохраняется.",
-        "incog_off":       "🕶 Режим инкогнито <b>ВЫКЛЮЧЕН</b>. Сохранение истории восстановлено.",
-        "lang_current":    "🌐 Текущий язык: <b>{cur}</b>\n\nПереключить: /lang ru  |  /lang en",
-        "lang_switched":   "🌐 Язык переключён на: <b>{lang}</b>",
-        "lang_unknown":    "❌ Неизвестный язык. Доступно: ru, en",
-        "admin_panel":     "🛡 Панель управления активирована, сэр.",
-        "wl_empty":        "📭 Белый список пуст.",
-        "wl_header":       "👥 <b>Авторизованные пользователи</b>",
-        "banned_empty":    "✅ Список блокировок пуст.",
-        "banned_header":   "🚫 <b>Заблокированные ID</b>",
-        "access_revoked":  "🗑 Доступ аннулирован для ID <code>{uid}</code>.",
-        "user_added":      "✅ Пользователь <code>{uid}</code> добавлен в белый список.",
-        "use_broadcast":   "📢 Используйте: /broadcast &lt;текст&gt;",
-        "img_fail":        "⚠️ Сбой графической подсистемы.",
-        "qr_fail":         "⚠️ Сбой генерации QR.",
-        "tts_fail":        "⚠️ Ошибка синтеза речи.",
-        "img_analysis":    "⚠️ Ошибка анализа изображения.",
-        "sticker_fail":    "⚠️ Ошибка анализа стикера.",
-        "audio_fail":      "⚠️ Ошибка обработки аудио.",
-        "doc_fail":        "⚠️ Ошибка анализа документа.",
-        "no_text":         "⚠️ Не удалось извлечь текст.",
-        "no_voice":        "↩️ Ответьте на голосовое сообщение.",
-        "no_reply":        "↩️ Сначала ответьте на сообщение.",
-        "unauthorized":    "🚨 <b>НЕСАНКЦИОНИРОВАННЫЙ ДОСТУП</b>",
+        "welcome_owner":  "🤖 <b>J.A.R.V.I.S.</b> к вашим услугам, сэр.\n\nВсе системы в норме. Введите /help.",
+        "welcome_other":  "🤖 <b>J.A.R.V.I.S. Online</b>\n\nГотов к работе. Введите /help.",
+        "processing":     "🧠 <i>Обработка…</i>",
+        "slow_down":      "⏳ Помедленнее, сэр.",
+        "gemini_down":    "⚠️ Нейронная сеть временно недоступна.",
+        "req_error":      "⚠️ Ошибка обработки запроса.",
+        "memory_cleared": "🧹 Память очищена.",
+        "unknown_mode":   "❌ Неизвестный режим. Используйте /help.",
+        "mode_switched":  "✅ Режим: <b>{mode}</b>.",
+        "mode_current":   "🎭 Текущий: <b>{cur}</b>\n\nДоступные: {modes}",
+        "incog_on":       "🕶 Инкогнито <b>ВКЛ</b>.",
+        "incog_off":      "🕶 Инкогнито <b>ВЫКЛ</b>.",
+        "lang_current":   "🌐 Язык: <b>{cur}</b>\n\n/lang ru  |  /lang en",
+        "lang_switched":  "🌐 Язык: <b>{lang}</b>",
+        "lang_unknown":   "❌ Доступно: ru, en",
+        "admin_panel":    "🛡 Панель управления, сэр.",
+        "wl_empty":       "📭 Белый список пуст.",
+        "wl_header":      "👥 <b>Авторизованные</b>",
+        "banned_empty":   "✅ Блокировок нет.",
+        "banned_header":  "🚫 <b>Заблокированные</b>",
+        "access_revoked": "🗑 Доступ аннулирован: <code>{uid}</code>.",
+        "user_added":     "✅ <code>{uid}</code> добавлен.",
+        "use_broadcast":  "📢 /broadcast &lt;текст&gt;",
+        "img_fail":       "⚠️ Сбой графики.",
+        "qr_fail":        "⚠️ Сбой QR.",
+        "tts_fail":       "⚠️ Ошибка TTS.",
+        "img_analysis":   "⚠️ Ошибка анализа фото.",
+        "sticker_fail":   "⚠️ Ошибка стикера.",
+        "audio_fail":     "⚠️ Ошибка аудио.",
+        "doc_fail":       "⚠️ Ошибка документа.",
+        "no_text":        "⚠️ Не удалось извлечь текст.",
+        "no_voice":       "↩️ Ответьте на голосовое.",
+        "no_reply":       "↩️ Ответьте на сообщение.",
+        "unauthorized":   "🚨 <b>НЕСАНКЦИОНИРОВАННЫЙ ДОСТУП</b>",
     },
     "en": {
-        "welcome_owner":   "🤖 <b>J.A.R.V.I.S.</b> at your service, Sir.\n\nAll systems nominal. Type /help for the full command list.",
-        "welcome_other":   "🤖 <b>J.A.R.V.I.S. Online</b>\n\nReady for interaction. Type /help for the command list.",
-        "help_title":      "🤖 <b>J.A.R.V.I.S. — Full Command List</b>",
-        "processing":      "🧠 <i>Processing…</i>",
-        "slow_down":       "⏳ Slow down, Sir.",
-        "gemini_down":     "⚠️ Neural matrix temporarily unavailable.",
-        "req_error":       "⚠️ Request processing error.",
-        "memory_cleared":  "🧹 Memory cleared. Context reset.",
-        "unknown_mode":    "❌ Unknown mode. Use /help.",
-        "mode_switched":   "✅ Mode switched to: <b>{mode}</b>.",
-        "mode_current":    "🎭 Current mode: <b>{cur}</b>\n\nAvailable: {modes}",
-        "incog_on":        "🕶 Incognito mode <b>ON</b>. History not saved.",
-        "incog_off":       "🕶 Incognito mode <b>OFF</b>. History saving restored.",
-        "lang_current":    "🌐 Current language: <b>{cur}</b>\n\nSwitch: /lang ru  |  /lang en",
-        "lang_switched":   "🌐 Language switched to: <b>{lang}</b>",
-        "lang_unknown":    "❌ Unknown language. Available: ru, en",
-        "admin_panel":     "🛡 Admin panel activated, Sir.",
-        "wl_empty":        "📭 Whitelist is empty.",
-        "wl_header":       "👥 <b>Authorized users</b>",
-        "banned_empty":    "✅ Ban list is empty.",
-        "banned_header":   "🚫 <b>Banned IDs</b>",
-        "access_revoked":  "🗑 Access revoked for ID <code>{uid}</code>.",
-        "user_added":      "✅ User <code>{uid}</code> added to whitelist.",
-        "use_broadcast":   "📢 Use: /broadcast &lt;text&gt;",
-        "img_fail":        "⚠️ Graphics subsystem failure.",
-        "qr_fail":         "⚠️ QR generation failure.",
-        "tts_fail":        "⚠️ Speech synthesis error.",
-        "img_analysis":    "⚠️ Image analysis error.",
-        "sticker_fail":    "⚠️ Sticker analysis error.",
-        "audio_fail":      "⚠️ Audio processing error.",
-        "doc_fail":        "⚠️ Document analysis error.",
-        "no_text":         "⚠️ Could not extract text.",
-        "no_voice":        "↩️ Reply to a voice message first.",
-        "no_reply":        "↩️ Reply to a message first.",
-        "unauthorized":    "🚨 <b>UNAUTHORIZED ACCESS</b>",
+        "welcome_owner":  "🤖 <b>J.A.R.V.I.S.</b> at your service, Sir.\n\nAll systems nominal. Type /help.",
+        "welcome_other":  "🤖 <b>J.A.R.V.I.S. Online</b>\n\nReady. Type /help.",
+        "processing":     "🧠 <i>Processing…</i>",
+        "slow_down":      "⏳ Slow down, Sir.",
+        "gemini_down":    "⚠️ Neural matrix temporarily unavailable.",
+        "req_error":      "⚠️ Request processing error.",
+        "memory_cleared": "🧹 Memory cleared.",
+        "unknown_mode":   "❌ Unknown mode. Use /help.",
+        "mode_switched":  "✅ Mode: <b>{mode}</b>.",
+        "mode_current":   "🎭 Current: <b>{cur}</b>\n\nAvailable: {modes}",
+        "incog_on":       "🕶 Incognito <b>ON</b>.",
+        "incog_off":      "🕶 Incognito <b>OFF</b>.",
+        "lang_current":   "🌐 Language: <b>{cur}</b>\n\n/lang ru  |  /lang en",
+        "lang_switched":  "🌐 Language: <b>{lang}</b>",
+        "lang_unknown":   "❌ Available: ru, en",
+        "admin_panel":    "🛡 Admin panel activated, Sir.",
+        "wl_empty":       "📭 Whitelist empty.",
+        "wl_header":      "👥 <b>Authorized</b>",
+        "banned_empty":   "✅ No bans.",
+        "banned_header":  "🚫 <b>Banned</b>",
+        "access_revoked": "🗑 Revoked: <code>{uid}</code>.",
+        "user_added":     "✅ <code>{uid}</code> added.",
+        "use_broadcast":  "📢 /broadcast &lt;text&gt;",
+        "img_fail":       "⚠️ Graphics failure.",
+        "qr_fail":        "⚠️ QR failure.",
+        "tts_fail":       "⚠️ TTS error.",
+        "img_analysis":   "⚠️ Image analysis error.",
+        "sticker_fail":   "⚠️ Sticker error.",
+        "audio_fail":     "⚠️ Audio error.",
+        "doc_fail":       "⚠️ Document error.",
+        "no_text":        "⚠️ Could not extract text.",
+        "no_voice":       "↩️ Reply to a voice message.",
+        "no_reply":       "↩️ Reply to a message.",
+        "unauthorized":   "🚨 <b>UNAUTHORIZED ACCESS</b>",
     },
 }
 
@@ -333,14 +335,12 @@ async def call_gemini(prompt_text, user_id, system_instruction=None, media_parts
 
             if len(hist) > 20:
                 try:
-                    summary_contents = contents.copy()
-                    summary_contents.append(types.Content(
+                    sc = contents.copy()
+                    sc.append(types.Content(
                         role="user",
                         parts=[types.Part.from_text(text="Summarize this conversation, preserving all key facts, names, code links and decisions.")],
                     ))
-                    summary = ai_client.models.generate_content(
-                        model=GEMINI_MODEL, contents=summary_contents,
-                    )
+                    summary = ai_client.models.generate_content(model=GEMINI_MODEL, contents=sc)
                     USER_HISTORY[user_id] = [
                         {"role": "user",  "parts": [{"text": "Previous context summary."}]},
                         {"role": "model", "parts": [{"text": summary.text}]},
@@ -377,9 +377,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
     lines = [
-        "🤖 <b>J.A.R.V.I.S. — Full Command List</b>",
+        "🤖 <b>J.A.R.V.I.S. — Commands</b>",
         "",
         "🟢 <b>Core</b>",
         "  /start  /help  /reset  /mode  /lang",
@@ -389,7 +388,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  /draw  /qr  /tts  /poll  /quiz",
         "  /speed  /screenshot  /translate  /summarize",
         "",
-        "🛡 <b>Admin</b> <i>(owner only)</i>",
+        "🛡 <b>Admin</b>",
         "  /admin  /add  /remove  /whitelist",
         "  /ban  /unban  /mute  /warn  /warnings",
         "  /broadcast  /send  /backup  /logs  /export_logs",
@@ -403,7 +402,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  /report  /tickets  /close_ticket",
         "  /stats  /health  /stopwords",
         "",
-        "📄 <i>Just send text, images, docs, voice or stickers.</i>",
+        "📄 <i>Send text, images, docs, voice or stickers.</i>",
     ]
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
@@ -437,13 +436,13 @@ async def mode_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def incognito_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     INCOGNITO_USERS.add(uid)
-    await update.message.reply_text(t(uid, "incog_on"), parse_mode=ParseMode.HTML)
+    await update.message.reply_text(t(uid, "incog_on"))
 
 
 async def incognito_off_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     INCOGNITO_USERS.discard(uid)
-    await update.message.reply_text(t(uid, "incog_off"), parse_mode=ParseMode.HTML)
+    await update.message.reply_text(t(uid, "incog_off"))
 
 
 async def lang_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -510,7 +509,7 @@ async def draw_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     track_command(uid, "/draw")
     if not context.args:
-        await update.message.reply_text("🎨 Format: /draw &lt;description&gt;", parse_mode=ParseMode.HTML)
+        await update.message.reply_text("🎨 /draw &lt;description&gt;", parse_mode=ParseMode.HTML)
         return
     desc = " ".join(context.args)
     await context.bot.send_chat_action(update.effective_chat.id, ChatAction.UPLOAD_PHOTO)
@@ -542,7 +541,7 @@ async def qr_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     track_command(uid, "/qr")
     text = " ".join(context.args)
     if not text or len(text) > 1000:
-        await update.message.reply_text("🔳 Text must be 1-1000 chars.")
+        await update.message.reply_text("🔳 1-1000 chars.")
         return
     try:
         await context.bot.send_chat_action(update.effective_chat.id, ChatAction.UPLOAD_PHOTO)
@@ -559,7 +558,7 @@ async def tts_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     track_command(uid, "/tts")
     text = " ".join(context.args)
     if not text or len(text) > 500:
-        await update.message.reply_text("🔊 Text must be 1-500 chars.")
+        await update.message.reply_text("🔊 1-500 chars.")
         return
     try:
         await context.bot.send_chat_action(update.effective_chat.id, ChatAction.RECORD_VOICE)
@@ -572,6 +571,20 @@ async def tts_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(t(uid, "tts_fail"))
 
 
+def _decode_qr_bytes(data: bytes) -> str:
+    """Decode QR from raw image bytes using OpenCV. Returns empty string if none."""
+    try:
+        np_arr = np.frombuffer(bytes(data), np.uint8)
+        img_cv = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+        if img_cv is None:
+            return ""
+        detector = cv2.QRCodeDetector()
+        qr_data, _, _ = detector.detectAndDecode(img_cv)
+        return (qr_data or "").strip()
+    except Exception:
+        return ""
+
+
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     track_usage(uid)
@@ -579,14 +592,13 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f = await update.message.photo[-1].get_file()
         data = await f.download_as_bytearray()
 
-        try:
-            decoded = decode(Image.open(io.BytesIO(data)))
-            if decoded:
-                texts = "\n".join(d.data.decode("utf-8") for d in decoded)
-                await update.message.reply_text(f"🔳 <b>QR decoded</b>\n\n<code>{texts}</code>", parse_mode=ParseMode.HTML)
-                return
-        except Exception:
-            pass
+        qr = _decode_qr_bytes(bytes(data))
+        if qr:
+            await update.message.reply_text(
+                f"🔳 <b>QR decoded</b>\n\n<code>{qr}</code>",
+                parse_mode=ParseMode.HTML,
+            )
+            return
 
         await context.bot.send_chat_action(update.effective_chat.id, ChatAction.TYPING)
         caption = update.message.caption or "Describe this image in detail."
@@ -639,7 +651,7 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         doc = update.message.document
         if doc.file_size > 10 * 1024 * 1024:
-            await update.message.reply_text("⚠️ File too large (max 10 MB).")
+            await update.message.reply_text("⚠️ Max 10 MB.")
             return
         ext = os.path.splitext(doc.file_name)[1].lower()
         if ext not in (".txt", ".pdf", ".docx"):
@@ -672,7 +684,7 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def poll_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     parts = [p.strip() for p in " ".join(context.args).split("|") if p.strip()]
     if len(parts) < 3 or len(parts) > 11:
-        await update.message.reply_text("📊 Format: /poll Q | Opt1 | Opt2 …")
+        await update.message.reply_text("📊 /poll Q | Opt1 | Opt2 …")
         return
     try:
         await context.bot.send_poll(update.effective_chat.id, question=parts[0], options=parts[1:])
@@ -695,7 +707,7 @@ async def quiz_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data = json.loads(_extract(reply))
         except json.JSONDecodeError:
             reply = await call_gemini(prompt + " Return ONLY valid JSON.", uid, json_mode=True,
-                                       system_instruction="Output strictly valid JSON.")
+                                      system_instruction="Output strictly valid JSON.")
             data = json.loads(_extract(reply))
         await context.bot.send_poll(
             update.effective_chat.id,
@@ -721,7 +733,7 @@ async def speed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         factor = float(context.args[0])
         if not 1.0 < factor <= 4.0:
-            await update.message.reply_text("⚡ Factor must be between 1.1 and 4.")
+            await update.message.reply_text("⚡ 1.1 – 4.0")
             return
         await context.bot.send_chat_action(update.effective_chat.id, ChatAction.RECORD_VOICE)
         f = await r.voice.get_file()
@@ -736,7 +748,6 @@ async def speed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def screenshot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
     if not context.args:
         return
     url = context.args[0]
@@ -794,7 +805,7 @@ async def _do_ban(context, uid, reason, actor):
     save_state()
     log_mod_action(actor, uid, "BAN", reason)
     try:
-        await context.bot.send_message(OWNER_ID, f"🚨 Ban applied to <code>{uid}</code>. Reason: {reason}",
+        await context.bot.send_message(OWNER_ID, f"🚨 Ban: <code>{uid}</code>. Reason: {reason}",
                                        parse_mode=ParseMode.HTML)
     except Exception:
         pass
@@ -839,7 +850,7 @@ async def _show_bans(update, context):
 @owner_only
 async def add_whitelist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("👥 Format: /add &lt;user_id&gt; [duration|perm]", parse_mode=ParseMode.HTML)
+        await update.message.reply_text("👥 /add &lt;user_id&gt; [duration|perm]", parse_mode=ParseMode.HTML)
         return
     try:
         uid = int(context.args[0])
@@ -949,7 +960,7 @@ async def mute_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_group_permissions(update, context):
         return
     if len(context.args) < 2:
-        await update.message.reply_text("🔇 Format: /mute &lt;user_id&gt; &lt;duration|perm&gt;", parse_mode=ParseMode.HTML)
+        await update.message.reply_text("🔇 /mute &lt;user_id&gt; &lt;duration|perm&gt;", parse_mode=ParseMode.HTML)
         return
     try:
         uid = int(context.args[0])
@@ -984,7 +995,7 @@ async def warn_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"⚠️ Warning <b>{len(wl)}/3</b> to <code>{uid}</code>.\nReason: {reason}", parse_mode=ParseMode.HTML)
     if len(wl) >= 3:
         await _do_ban(context, uid, "auto-ban: 3 warnings", update.effective_user.id)
-        await update.message.reply_text(f"🚨 Auto-ban applied to <code>{uid}</code>.", parse_mode=ParseMode.HTML)
+        await update.message.reply_text(f"🚨 Auto-ban: <code>{uid}</code>.", parse_mode=ParseMode.HTML)
 
 
 async def warnings_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1123,7 +1134,7 @@ async def cv_cmd(update, context):
 
 async def translate_long_cmd(update, context):
     if len(context.args) < 2:
-        await update.message.reply_text("🌐 Usage: /translate_long &lt;lang&gt; &lt;text&gt;", parse_mode=ParseMode.HTML)
+        await update.message.reply_text("🌐 /translate_long &lt;lang&gt; &lt;text&gt;", parse_mode=ParseMode.HTML)
         return
     lang, text = context.args[0], " ".join(context.args[1:])
     await _ai(update, context, f"Translate the following into {lang}. Preserve formatting.")
@@ -1173,7 +1184,7 @@ async def clear_session_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def report_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = " ".join(context.args)
     if not text:
-        await update.message.reply_text("📩 Usage: /report &lt;your issue&gt;", parse_mode=ParseMode.HTML)
+        await update.message.reply_text("📩 /report &lt;issue&gt;", parse_mode=ParseMode.HTML)
         return
     ticket = {
         "id": len(TICKETS) + 1,
@@ -1257,7 +1268,7 @@ async def health_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @owner_only
 async def stopwords_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("🛑 Stop-words: " + ", ".join(STOP_WORDS))
+        await update.message.reply_text("🛑 " + ", ".join(STOP_WORDS))
         return
     action = context.args[0].lower()
     if action == "add" and len(context.args) > 1:
@@ -1331,9 +1342,8 @@ async def global_security_middleware(update: Update, context):
     if uid in state["BANNED"]:
         raise ApplicationHandlerStop
 
-    # Flood guard
     now_ts = time.time()
-    bucket = [t for t in FLOOD_WINDOW.get(uid, []) if now_ts - t < 60]
+    bucket = [x for x in FLOOD_WINDOW.get(uid, []) if now_ts - x < 60]
     bucket.append(now_ts)
     FLOOD_WINDOW[uid] = bucket
     if len(bucket) > 10 and uid != OWNER_ID:
@@ -1345,7 +1355,6 @@ async def global_security_middleware(update: Update, context):
         save_state()
         raise ApplicationHandlerStop
 
-    # Intruder detection
     if uid != OWNER_ID and uid not in state["WHITELIST"]:
         entry = {
             "first_name":   update.effective_user.first_name,
@@ -1407,7 +1416,6 @@ def main():
     app.job_queue.run_repeating(cleanup_expired_job, interval=60)
     app.job_queue.run_repeating(auto_backup_job, interval=7 * 24 * 3600, first=10)
 
-    # Phase 1
     for cmd, fn in [
         ("start", start), ("help", help_cmd), ("reset", reset_cmd),
         ("mode", mode_cmd), ("lang", lang_cmd),
@@ -1415,7 +1423,6 @@ def main():
     ]:
         app.add_handler(CommandHandler(cmd, fn))
 
-    # Phase 2
     for cmd, fn in [
         ("draw", draw_cmd), ("qr", qr_cmd), ("tts", tts_cmd),
         ("poll", poll_cmd), ("quiz", quiz_cmd), ("speed", speed_cmd),
@@ -1424,12 +1431,11 @@ def main():
     ]:
         app.add_handler(CommandHandler(cmd, fn))
 
-    app.add_handler(MessageHandler(filters.PHOTO,          photo_handler))
-    app.add_handler(MessageHandler(filters.Sticker.ALL,    sticker_handler))
-    app.add_handler(MessageHandler(filters.VOICE,          voice_handler))
-    app.add_handler(MessageHandler(filters.Document.ALL,   document_handler))
+    app.add_handler(MessageHandler(filters.PHOTO,        photo_handler))
+    app.add_handler(MessageHandler(filters.Sticker.ALL,  sticker_handler))
+    app.add_handler(MessageHandler(filters.VOICE,        voice_handler))
+    app.add_handler(MessageHandler(filters.Document.ALL, document_handler))
 
-    # Phase 3
     for cmd, fn in [
         ("admin", admin_panel), ("add", add_whitelist), ("remove", remove_whitelist),
         ("whitelist", whitelist_list), ("ban", ban_user), ("unban", unban_user),
@@ -1444,7 +1450,6 @@ def main():
         admin_buttons,
     ))
 
-    # Phase 4
     for cmd, fn in [
         ("review", review_cmd), ("regex", regex_cmd), ("sql", sql_cmd),
         ("explain", explain_cmd), ("refactor", refactor_cmd), ("uml", uml_cmd),
@@ -1453,7 +1458,6 @@ def main():
     ]:
         app.add_handler(CommandHandler(cmd, fn))
 
-    # Phase 5
     for cmd, fn in [
         ("export_whitelist", export_whitelist_cmd), ("clear_session", clear_session_cmd),
         ("report", report_cmd), ("tickets", tickets_cmd), ("close_ticket", close_ticket_cmd),
@@ -1461,7 +1465,6 @@ def main():
     ]:
         app.add_handler(CommandHandler(cmd, fn))
 
-    # Fallback
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
     logger.info("Starting polling...")

@@ -1,11 +1,11 @@
 python-telegram-bot[job-queue]==21.6
 google-genai
 qrcode[pil]
-pyzbar
+opencv-python-headless
 gtts
 Pillow
 requests
-pydub
+imageio-ffmpeg
 pypdf
 python-docx
 psutil
