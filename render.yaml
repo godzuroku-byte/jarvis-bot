@@ -1,9 +1,10 @@
 services:
-  - type: worker
+  - type: web
     name: jarvis-bot
     runtime: python
     buildCommand: bash build.sh
     startCommand: python main.py
+    healthCheckPath: /health
     envVars:
       - key: BOT_TOKEN
         sync: false

@@ -9,3 +9,4 @@ pydub
 pypdf
 python-docx
 psutil
+flask
