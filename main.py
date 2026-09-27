@@ -1,7 +1,7 @@
 """
-J.A.R.V.I.S. — CORE SYSTEM (FULL)
-Phases 1-5 | Modules B-I | ru+en | Boss: Silent / Tony Stark
-Handlers: photo, sticker (static+animated), voice, video, document, animation
+J.A.R.V.I.S. — CORE SYSTEM (FINAL)
+Upstash memory | Hardcoded identity | Boss: Silent / Tony Stark
+Phases 1-5 | Modules B-I | ru+en
 """
 
 import os
@@ -50,6 +50,14 @@ try:
 except Exception:
     pass
 
+# Upstash (optional — works if env vars present)
+try:
+    from upstash_redis import Redis as UpstashRedis
+    _UPSTASH_AVAILABLE = True
+except Exception:
+    UpstashRedis = None
+    _UPSTASH_AVAILABLE = False
+
 
 # ============================================================
 #  LOGGING & CONFIG
@@ -76,6 +84,9 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GEMINI_MODEL   = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
 ENV_OWNER_ID   = int(os.environ.get("OWNER_ID", "0"))
 
+UPSTASH_URL    = os.environ.get("UPSTASH_REDIS_REST_URL")
+UPSTASH_TOKEN  = os.environ.get("UPSTASH_REDIS_REST_TOKEN")
+
 if not BOT_TOKEN:      raise RuntimeError("BOT_TOKEN required.")
 if not GEMINI_API_KEY: raise RuntimeError("GEMINI_API_KEY required.")
 if not ENV_OWNER_ID:   raise RuntimeError("OWNER_ID required.")
@@ -92,6 +103,22 @@ if not os.path.exists(CONFIG_FILE):
 
 with open(CONFIG_FILE, "r", encoding="utf-8") as f:
     config = json.load(f)
+
+
+# ============================================================
+#  UPSTASH CLIENT (memory persistence)
+# ============================================================
+redis_client = None
+if _UPSTASH_AVAILABLE and UPSTASH_URL and UPSTASH_TOKEN:
+    try:
+        redis_client = UpstashRedis(url=UPSTASH_URL, token=UPSTASH_TOKEN)
+        redis_client.ping()
+        logger.info("Upstash connected.")
+    except Exception as e:
+        logger.error(f"Upstash init failed: {e}")
+        redis_client = None
+else:
+    logger.warning("Upstash not configured — memory will not persist.")
 
 
 # ============================================================
@@ -197,6 +224,7 @@ TEXTS = {
         "img_analysis":   "⚠️ Ошибка фото.",
         "sticker_fail":   "⚠️ Ошибка стикера.",
         "audio_fail":     "⚠️ Ошибка аудио.",
+        "video_fail":     "⚠️ Ошибка видео.",
         "doc_fail":       "⚠️ Ошибка документа.",
         "no_text":        "⚠️ Нет текста.",
         "no_voice":       "↩️ Ответьте на голосовое.",
@@ -223,9 +251,10 @@ TEXTS = {
         "silent_off":     "🔊 Silent mode ВЫКЛ.",
         "lockdown_on":    "🔒 Lockdown ВКЛ.",
         "lockdown_off":   "🔓 Lockdown ВЫКЛ.",
-        "sticker_animated":"🎭 Это анимированный/видео-стикер. Опишите словами что на нём — расскажу контекст, или отправьте **статичный** стикер.",
-        "zip_received":   "📦 Архив получен, сэр. Я не могу открыть ZIP внутри Telegram — пришлите файлы по отдельности или содержимое текстом. Если это код — распакуйте и отправьте `.py`/`.txt`, я разберу.",
-        "video_received": "🎬 Видео получено. Опишите словами что нужно — или отправьте короткий фрагмент как фото/GIF.",
+        "sticker_animated":"🎭 Это анимированный/видео-стикер, сэр. Опишите словами — расскажу контекст, или отправьте статичный стикер.",
+        "zip_received":   "📦 Архив, сэр. Я не открываю ZIP. Распакуйте и отправьте файлы, или вставьте код текстом — разберу.",
+        "video_received": "🎬 Видео получено, сэр. Анализирую…",
+        "audio_received": "🎙 Аудио получено, сэр. Обрабатываю…",
     },
     "en": {
         "welcome_owner":  "🎩 <b>J.A.R.V.I.S.</b> at your service, Sir Silent.\n\nAll systems nominal. /help.",
@@ -272,6 +301,7 @@ TEXTS = {
         "img_analysis":   "⚠️ Image error.",
         "sticker_fail":   "⚠️ Sticker error.",
         "audio_fail":     "⚠️ Audio error.",
+        "video_fail":     "⚠️ Video error.",
         "doc_fail":       "⚠️ Document error.",
         "no_text":        "⚠️ No text.",
         "no_voice":       "↩️ Reply to a voice message.",
@@ -298,9 +328,10 @@ TEXTS = {
         "silent_off":     "🔊 Silent mode OFF.",
         "lockdown_on":    "🔒 Lockdown ON.",
         "lockdown_off":   "🔓 Lockdown OFF.",
-        "sticker_animated":"🎭 This is an animated/video sticker. Describe it in words — I'll explain, or send a **static** sticker.",
-        "zip_received":   "📦 Archive received, Sir. I cannot open ZIP inside Telegram — send files individually or paste contents. If it's code — unpack and send `.py`/`.txt`, I'll review.",
-        "video_received": "🎬 Video received. Describe what you need — or send a short fragment as photo/GIF.",
+        "sticker_animated":"🎭 Animated/video sticker, Sir. Describe it in words — I'll explain, or send a static sticker.",
+        "zip_received":   "📦 Archive, Sir. I do not open ZIP. Unpack and send files, or paste code as text.",
+        "video_received": "🎬 Video received, Sir. Analysing…",
+        "audio_received": "🎙 Audio received, Sir. Processing…",
     },
 }
 
@@ -365,6 +396,43 @@ def owner_claim_reply(uid: int) -> str:
                 "Идентификация — по защищённому каналу, а не словам.")
     return ("🎖 The sole Creator is <b>Silent</b> (Tony Stark). "
             "Identification via secure channel, not words.")
+
+
+# ============================================================
+#  MEMORY (Upstash + fallback)
+# ============================================================
+def memory_key(uid: int) -> str:
+    return f"jarvis:hist:{uid}"
+
+
+def load_history_from_redis(uid: int):
+    if not redis_client:
+        return
+    try:
+        raw = redis_client.get(memory_key(uid))
+        if raw:
+            USER_HISTORY[uid] = json.loads(raw)
+    except Exception as e:
+        logger.error(f"Redis load {uid}: {e}")
+
+
+def save_history_to_redis(uid: int):
+    if not redis_client:
+        return
+    try:
+        hist = USER_HISTORY.get(uid, [])
+        redis_client.set(memory_key(uid), json.dumps(hist, ensure_ascii=False, default=str))
+    except Exception as e:
+        logger.error(f"Redis save {uid}: {e}")
+
+
+def clear_history_redis(uid: int):
+    if not redis_client:
+        return
+    try:
+        redis_client.delete(memory_key(uid))
+    except Exception:
+        pass
 
 
 # ============================================================
@@ -514,6 +582,7 @@ async def call_gemini(prompt_text, user_id, system_instruction=None, media_parts
                     ]
                 except Exception:
                     USER_HISTORY[user_id] = hist[-10:]
+            save_history_to_redis(user_id)
         return res_text
     except Exception as e:
         logger.exception(f"Gemini: {e}")
@@ -527,7 +596,7 @@ async def call_gemini(prompt_text, user_id, system_instruction=None, media_parts
 
 
 # ============================================================
-#  LANGUAGE / VIBE
+#  LANGUAGE / VIBE KEYBOARDS
 # ============================================================
 def lang_keyboard():
     return InlineKeyboardMarkup([[
@@ -574,67 +643,39 @@ async def help_cmd(update, context):
         lines = [
             "🎩 <b>J.A.R.V.I.S. — Команды</b>",
             "",
-            "🟢 /start /help /reset /mode /vibe /lang /id",
-            "🕶 /incognito /incognito_off",
-            "",
+            "🟢 /start /help /reset /mode /vibe /lang /id /incognito /incognito_off",
             "🎨 /draw /qr /tts /poll /quiz /speed /screenshot /translate /summarize",
-            "",
-            "🧮 /calc /currency /weather /time /timer /remind /todo",
-            "  /password /uuid /convert /bmi",
-            "",
+            "🧮 /calc /currency /weather /time /timer /remind /todo /password /uuid /convert /bmi",
             "✍️ /improve /fix /shorten /expand /style /keywords /theses /tone",
-            "",
             "🖼 /upscale /compress /sticker /ocr /colors /exif",
-            "",
             "🔒 /invite /redeem /intruders /prune /silent /announce /lockdown",
-            "",
             "💻 /diff /commit /dockerfile /gitignore /json /b64 /hash /cron /jwt /urlenc",
-            "",
             "🗂 /diary /secret /task /habit /money",
-            "",
             "📊 /monitor /rss",
-            "",
             "🌈 /gif /meme /horoscope /recipe",
-            "",
             "🛡 /admin /add /remove /whitelist /ban /unban /mute /warn /warnings",
             "  /broadcast /send /backup /logs /export_logs",
-            "",
             "🧠 /review /regex /sql /explain /refactor /uml /pytest /doc /cv /ask",
-            "⚙️ /export_whitelist /clear_session /report /tickets /close_ticket",
-            "  /stats /health /stopwords",
+            "⚙️ /export_whitelist /clear_session /report /tickets /close_ticket /stats /health /stopwords",
         ]
     else:
         lines = [
             "🎩 <b>J.A.R.V.I.S. — Commands</b>",
             "",
-            "🟢 /start /help /reset /mode /vibe /lang /id",
-            "🕶 /incognito /incognito_off",
-            "",
+            "🟢 /start /help /reset /mode /vibe /lang /id /incognito /incognito_off",
             "🎨 /draw /qr /tts /poll /quiz /speed /screenshot /translate /summarize",
-            "",
-            "🧮 /calc /currency /weather /time /timer /remind /todo",
-            "  /password /uuid /convert /bmi",
-            "",
+            "🧮 /calc /currency /weather /time /timer /remind /todo /password /uuid /convert /bmi",
             "✍️ /improve /fix /shorten /expand /style /keywords /theses /tone",
-            "",
             "🖼 /upscale /compress /sticker /ocr /colors /exif",
-            "",
             "🔒 /invite /redeem /intruders /prune /silent /announce /lockdown",
-            "",
             "💻 /diff /commit /dockerfile /gitignore /json /b64 /hash /cron /jwt /urlenc",
-            "",
             "🗂 /diary /secret /task /habit /money",
-            "",
             "📊 /monitor /rss",
-            "",
             "🌈 /gif /meme /horoscope /recipe",
-            "",
             "🛡 /admin /add /remove /whitelist /ban /unban /mute /warn /warnings",
             "  /broadcast /send /backup /logs /export_logs",
-            "",
             "🧠 /review /regex /sql /explain /refactor /uml /pytest /doc /cv /ask",
-            "⚙️ /export_whitelist /clear_session /report /tickets /close_ticket",
-            "  /stats /health /stopwords",
+            "⚙️ /export_whitelist /clear_session /report /tickets /close_ticket /stats /health /stopwords",
         ]
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
@@ -642,6 +683,7 @@ async def help_cmd(update, context):
 async def reset_cmd(update, context):
     uid = update.effective_user.id
     USER_HISTORY.pop(uid, None)
+    clear_history_redis(uid)
     await update.message.reply_text(t(uid, "memory_cleared"))
 
 
@@ -653,7 +695,7 @@ async def mode_cmd(update, context):
     m = context.args[0].lower()
     if m not in ("assistant", "tutor", "programmer", "psychologist"):
         await update.message.reply_text(t(uid, "unknown_mode")); return
-    USER_MODES[uid] = m; USER_HISTORY.pop(uid, None)
+    USER_MODES[uid] = m; USER_HISTORY.pop(uid, None); clear_history_redis(uid)
     await update.message.reply_text(t(uid, "mode_switched", mode=m), parse_mode=ParseMode.HTML)
 
 
@@ -665,8 +707,7 @@ async def vibe_cmd(update, context):
     if v not in ("formal", "casual", "sarcastic"):
         await update.message.reply_text("❌ formal|casual|sarcastic"); return
     USER_VIBES[uid] = v
-    state["VIBE"][str(uid)] = v
-    save_state()
+    state["VIBE"][str(uid)] = v; save_state()
     await update.message.reply_text(t(uid, "vibe_set", vibe=v), parse_mode=ParseMode.HTML)
 
 
@@ -726,6 +767,7 @@ async def text_handler(update, context):
     if update.message.reply_to_message and update.message.reply_to_message.text:
         msg = f"[Replying to: {update.message.reply_to_message.text}]\n\n{msg}"
 
+    load_history_from_redis(uid)
     await context.bot.send_chat_action(update.effective_chat.id, ChatAction.TYPING)
     status = await update.message.reply_text(t(uid, "processing"), parse_mode=ParseMode.HTML)
     try:
@@ -750,14 +792,30 @@ async def draw_cmd(update, context):
     await context.bot.send_chat_action(update.effective_chat.id, ChatAction.UPLOAD_PHOTO)
     status = await update.message.reply_text(t(uid, "draw_processing"), parse_mode=ParseMode.HTML)
     try:
-        enh = await call_gemini("English image prompt, ONLY prompt: " + desc, uid, system_instruction="Output only prompts.")
-        url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(enh.strip())}?width=1024&height=1024&nologo=true"
-        r = requests.get(url, timeout=60); r.raise_for_status()
-        img = Image.open(io.BytesIO(r.content)).convert("RGB"); img.thumbnail((1280, 1280))
+        enhance = (
+            f"Convert this image request into a detailed English image-generation prompt.\n"
+            f"Request: {desc}\n\n"
+            f"Rules:\n"
+            f"- Preserve the original subject EXACTLY\n"
+            f"- Add composition, style, lighting, atmosphere, camera angle\n"
+            f"- Return ONLY the English prompt. No quotes. No explanations."
+        )
+        enh = await call_gemini(enhance, uid)
+        seed = random.randint(1, 999999)
+        encoded = urllib.parse.quote(enh.strip())
+        url = f"https://image.pollinations.ai/prompt/{encoded}?width=1024&height=1024&nologo=true&seed={seed}"
+        r = requests.get(url, timeout=90)
+        r.raise_for_status()
+        if len(r.content) < 1000:
+            raise ValueError("Empty image")
+        img = Image.open(io.BytesIO(r.content)).convert("RGB")
+        img.thumbnail((1280, 1280))
         out = io.BytesIO(); img.save(out, format="JPEG", quality=85); out.seek(0)
-        await update.message.reply_photo(photo=out); await status.delete()
+        await update.message.reply_photo(photo=out, caption=f"🎨 <i>{desc[:100]}</i>", parse_mode=ParseMode.HTML)
+        await status.delete()
     except Exception as e:
-        logger.exception(f"Draw: {e}"); await status.edit_text(t(uid, "img_fail"))
+        logger.exception(f"Draw: {e}")
+        await status.edit_text(f"⚠️ Сбой, сэр.\n<i>{str(e)[:200]}</i>", parse_mode=ParseMode.HTML)
 
 
 async def qr_cmd(update, context):
@@ -819,10 +877,8 @@ async def sticker_handler(update, context):
     uid = update.effective_user.id
     try:
         st = update.message.sticker
-        # Animated/video stickers — cannot be analysed as image
         if st.is_animated or st.is_video:
-            await update.message.reply_text(t(uid, "sticker_animated"))
-            return
+            await update.message.reply_text(t(uid, "sticker_animated")); return
         f = await st.get_file()
         data = await f.download_as_bytearray()
         img = Image.open(io.BytesIO(data)).convert("RGBA")
@@ -837,31 +893,49 @@ async def sticker_handler(update, context):
 async def voice_handler(update, context):
     uid = update.effective_user.id
     try:
+        await update.message.reply_text(t(uid, "audio_received"))
         f = await update.message.voice.get_file()
         data = await f.download_as_bytearray()
         part = types.Part.from_bytes(data=bytes(data), mime_type="audio/ogg")
-        reply = await call_gemini("Transcribe and briefly react.", uid, media_parts=[part])
+        reply = await call_gemini(
+            "Transcribe this voice message. Then briefly react to its content.",
+            uid, media_parts=[part])
         await update.message.reply_text(f"{t(uid,'transcription')}\n\n{reply}", parse_mode=ParseMode.HTML)
     except Exception as e:
         logger.exception(f"Voice: {e}"); await update.message.reply_text(t(uid, "audio_fail"))
 
 
 async def video_handler(update, context):
+    """Handles both regular videos and round video notes. Gemini understands frames + audio."""
     uid = update.effective_user.id
     try:
-        v = update.message.video or update.message.video_note
-        if not v:
+        media = update.message.video or update.message.video_note
+        if not media:
+            return
+        # Telegram limit: video_note max 1 min, small. Regular video may be larger.
+        file_size = getattr(media, "file_size", 0) or 0
+        if file_size > 20 * 1024 * 1024:
+            await update.message.reply_text("⚠️ Видео больше 20 MB, сэр. Пришлите короче.")
             return
         await update.message.reply_text(t(uid, "video_received"))
+        f = await media.get_file()
+        data = await f.download_as_bytearray()
+        mime = "video/mp4"
+        part = types.Part.from_bytes(data=bytes(data), mime_type=mime)
+        prompt = (
+            "Analyze this video: describe the scene, environment, objects, and transcribe any speech. "
+            "Comment on the surroundings and what's happening."
+        )
+        reply = await call_gemini(prompt, uid, media_parts=[part])
+        await update.message.reply_text(reply)
     except Exception as e:
-        logger.exception(f"Video: {e}")
+        logger.exception(f"Video: {e}"); await update.message.reply_text(t(uid, "video_fail"))
 
 
 async def animation_handler(update, context):
-    """GIFs and animated content."""
     uid = update.effective_user.id
     try:
-        await update.message.reply_text("🎞 GIF получен. Что нужно с ним сделать? Опишите задачу.")
+        await update.message.reply_text("🎞 GIF получен, сэр. Что с ним сделать? Опишите задачу.")
     except Exception as e:
         logger.exception(f"Animation: {e}")
 
@@ -874,15 +948,13 @@ async def document_handler(update, context):
             await update.message.reply_text("⚠️ Max 20 MB."); return
         ext = os.path.splitext(doc.file_name)[1].lower()
 
-        # Archives
         if ext in (".zip", ".rar", ".7z", ".tar", ".gz", ".bz2"):
             await update.message.reply_text(t(uid, "zip_received")); return
 
-        # Code files — read as text
         code_exts = (".py", ".js", ".ts", ".json", ".html", ".css", ".md", ".txt",
                      ".yaml", ".yml", ".toml", ".ini", ".cfg", ".sh", ".bash",
                      ".java", ".c", ".cpp", ".h", ".go", ".rs", ".rb", ".php",
-                     ".sql", ".xml", ".csv", ".log", ".env", ".dockerfile")
+                     ".sql", ".xml", ".csv", ".log", ".env")
 
         if ext in code_exts:
             f = await doc.get_file()
@@ -898,7 +970,6 @@ async def document_handler(update, context):
             except: await update.message.reply_text(reply[:4000])
             return
 
-        # PDF / DOCX
         if ext not in (".pdf", ".docx"):
             return
 
@@ -1080,7 +1151,7 @@ async def todo_cmd(update, context):
     todo = ud.setdefault("todo", [])
     if not context.args or context.args[0].lower() == "list":
         if not todo:
-            await update.message.reply_text("📝 /todo add Task | /todo list | /todo done N | /todo clear"); return
+            await update.message.reply_text("📝 /todo add Task | list | done N | clear"); return
         lines = ["📝 <b>To-Do</b>", ""]
         for i, x in enumerate(todo, 1):
             m = "✅" if x.get("done") else "⬜"
@@ -1940,6 +2011,13 @@ async def export_whitelist_cmd(update, context):
 async def clear_session_cmd(update, context):
     USER_HISTORY.clear(); USER_MODES.clear(); USER_VIBES.clear()
     INCOGNITO_USERS.clear(); LAST_REQUEST.clear()
+    if redis_client:
+        try:
+            keys = redis_client.keys("jarvis:hist:*")
+            for k in keys or []:
+                redis_client.delete(k)
+        except Exception:
+            pass
     await update.message.reply_text(t(OWNER_ID, "session_purged"))
 
 
@@ -2069,11 +2147,9 @@ async def global_security_middleware(update, context):
     suid = str(uid)
     now = datetime.now()
 
-    # LOCKDOWN
     if LOCKDOWN and uid != OWNER_ID:
         raise ApplicationHandlerStop
 
-    # SILENT_MODE — only owner
     if SILENT_MODE and uid != OWNER_ID:
         raise ApplicationHandlerStop
 

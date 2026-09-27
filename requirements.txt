@@ -12,3 +12,4 @@ psutil
 flask
 pydub
 audioop-lts
+upstash-redis
