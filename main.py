@@ -1,7 +1,7 @@
 """
-J.A.R.V.I.S. — CORE SYSTEM (FULL)
+J.A.R.V.I.S. — CORE SYSTEM (FULL FIXED)
 Cloudflare | Currents | DuckDuckGo | Reddit | Wikipedia | Upstash | Natural Router
-All essential commands restored | ru+en | Boss: Silent / Tony Stark
+All essential commands | ru+en | Boss: Silent / Tony Stark
 """
 
 import os
@@ -263,27 +263,29 @@ def matches(msg, triggers):
 def identity_reply(uid):
     lang = LANG.get(str(uid), "en")
     if uid == OWNER_ID:
-        return "🎩 Я Джарвис, сэр Silent. Ваш персональный ассистент. Всё в вашем распоряжении." if lang == "ru" \
-               else "🎩 I am Jarvis, Sir Silent. Your personal assistant."
+        return ("🎩 Я Джарвис, сэр Silent. Ваш персональный ассистент. Всё в вашем распоряжении."
+                if lang == "ru"
+                else "🎩 I am Jarvis, Sir Silent. Your personal assistant.")
     return ("🎩 Я Джарвис — персональный ИИ-ассистент.\n\nМой Создатель — <b>Silent</b> (Тони Старк этой системы). /help."
-            if lang == "ru" else
-            "🎩 I am Jarvis — personal AI assistant.\n\nMy Creator is <b>Silent</b> (Tony Stark). /help.")
+            if lang == "ru"
+            else "🎩 I am Jarvis — personal AI assistant.\n\nMy Creator is <b>Silent</b> (Tony Stark). /help.")
 
 
 def creator_reply(uid):
     lang = LANG.get(str(uid), "en")
     return ("🎖 Мой Создатель — <b>Silent</b>, он же <b>Тони Старк</b>.\n\n@Silent_uwa — собрал меня с нуля."
-            if lang == "ru" else
-            "🎖 My Creator is <b>Silent</b>, a.k.a. <b>Tony Stark</b>.\n\n@Silent_uwa built me.")
+            if lang == "ru"
+            else "🎖 My Creator is <b>Silent</b>, a.k.a. <b>Tony Stark</b>.\n\n@Silent_uwa built me.")
 
 
 def claim_reply(uid):
     lang = LANG.get(str(uid), "en")
     if uid == OWNER_ID:
-        return "✅ Подтверждаю, сэр Silent. ID распознан." if lang == "ru" else "✅ Confirmed, Sir Silent."
+        return ("✅ Подтверждаю, сэр Silent. ID распознан."
+                if lang == "ru" else "✅ Confirmed, Sir Silent.")
     return ("🎖 Единственный Создатель — <b>Silent</b> (Тони Старк). Идентификация по защищённому каналу."
-            if lang == "ru" else
-            "🎖 The sole Creator is <b>Silent</b> (Tony Stark).")
+            if lang == "ru"
+            else "🎖 The sole Creator is <b>Silent</b> (Tony Stark).")
 
 
 # ============================================================
@@ -324,8 +326,10 @@ def save_history(uid):
 
 def clear_history_redis(uid):
     if not redis_client: return
-    try: redis_client.delete(memory_key(uid))
-    except: pass
+    try:
+        redis_client.delete(memory_key(uid))
+    except Exception:
+        pass
 
 
 def track_usage(uid):
@@ -455,65 +459,87 @@ async def natural_router(update, context, text: str) -> bool:
 
     if any(x in low for x in DRAW_TRIGGERS):
         desc = low
-        for tr in DRAW_TRIGGERS: desc = desc.replace(tr, "")
+        for tr in DRAW_TRIGGERS:
+            desc = desc.replace(tr, "")
         desc = desc.strip(" мне ,.")
         if desc:
-            context.args = desc.split(); await draw_cmd(update, context); return True
+            context.args = desc.split()
+            await draw_cmd(update, context)
+            return True
 
     if any(x in low for x in QR_TRIGGERS):
         url = low
-        for tr in QR_TRIGGERS: url = url.replace(tr, "")
+        for tr in QR_TRIGGERS:
+            url = url.replace(tr, "")
         url = url.strip(" из ,.")
         if url:
-            context.args = url.split(); await qr_cmd(update, context); return True
+            context.args = url.split()
+            await qr_cmd(update, context)
+            return True
 
     if any(x in low for x in TTS_TRIGGERS):
         phrase = low
-        for tr in TTS_TRIGGERS: phrase = phrase.replace(tr, "")
+        for tr in TTS_TRIGGERS:
+            phrase = phrase.replace(tr, "")
         phrase = phrase.strip(" ,.")
         if phrase:
-            context.args = phrase.split(); await tts_cmd(update, context); return True
+            context.args = phrase.split()
+            await tts_cmd(update, context)
+            return True
 
     if any(x in low for x in NEWS_TRIGGERS):
         topic = low
-        for tr in NEWS_TRIGGERS: topic = topic.replace(tr, "")
+        for tr in NEWS_TRIGGERS:
+            topic = topic.replace(tr, "")
         topic = topic.strip(" о про ,.")
         context.args = topic.split() if topic else []
-        await news_cmd(update, context); return True
+        await news_cmd(update, context)
+        return True
 
     if any(x in low for x in MEME_TRIGGERS):
         topic = low
-        for tr in MEME_TRIGGERS: topic = topic.replace(tr, "")
+        for tr in MEME_TRIGGERS:
+            topic = topic.replace(tr, "")
         topic = topic.strip(" про ,.")
         context.args = topic.split() if topic else []
-        await meme_cmd(update, context); return True
+        await meme_cmd(update, context)
+        return True
 
     if any(x in low for x in SEARCH_TRIGGERS):
         q = low
-        for tr in SEARCH_TRIGGERS: q = q.replace(tr, "")
+        for tr in SEARCH_TRIGGERS:
+            q = q.replace(tr, "")
         q = q.strip(" ,.")
         if q:
-            context.args = q.split(); await search_cmd(update, context); return True
+            context.args = q.split()
+            await search_cmd(update, context)
+            return True
 
     if any(x in low for x in TRANSLATE_TRIGGERS):
         m = re.search(r"переведи\s+(.+?)\s+на\s+(\w+)", low)
         if m:
             context.args = [m.group(2), m.group(1)]
-            await translate_cmd(update, context); return True
+            await translate_cmd(update, context)
+            return True
 
     if any(x in low for x in WEATHER_TRIGGERS):
         city = low
-        for tr in WEATHER_TRIGGERS: city = city.replace(tr, "")
+        for tr in WEATHER_TRIGGERS:
+            city = city.replace(tr, "")
         city = city.strip(" в ,.")
         context.args = city.split() if city else []
-        await weather_cmd(update, context); return True
+        await weather_cmd(update, context)
+        return True
 
     if any(x in low for x in WIKI_TRIGGERS):
         q = low
-        for tr in WIKI_TRIGGERS: q = q.replace(tr, "")
+        for tr in WIKI_TRIGGERS:
+            q = q.replace(tr, "")
         q = q.strip(" ,?.")
         if q:
-            context.args = q.split(); await wiki_cmd(update, context); return True
+            context.args = q.split()
+            await wiki_cmd(update, context)
+            return True
 
     return False
 
@@ -532,10 +558,14 @@ async def on_lang_callback(update, context):
     q = update.callback_query
     await q.answer()
     uid = update.effective_user.id
-    if q.data == "lang_ru": LANG[str(uid)] = "ru"; save_lang()
-    elif q.data == "lang_en": LANG[str(uid)] = "en"; save_lang()
-    try:    await q.edit_message_text(t(uid, "lang_set"), parse_mode=ParseMode.HTML)
-    except: await q.message.reply_text(t(uid, "lang_set"), parse_mode=ParseMode.HTML)
+    if q.data == "lang_ru":
+        LANG[str(uid)] = "ru"; save_lang()
+    elif q.data == "lang_en":
+        LANG[str(uid)] = "en"; save_lang()
+    try:
+        await q.edit_message_text(t(uid, "lang_set"), parse_mode=ParseMode.HTML)
+    except Exception:
+        await q.message.reply_text(t(uid, "lang_set"), parse_mode=ParseMode.HTML)
 
 
 async def start(update, context):
@@ -571,12 +601,12 @@ async def help_cmd(update, context):
         "/admin — " + ("панель босса" if ru else "boss panel"),
         "",
         "🧠 <b>AI Pro:</b> /review /refactor /sql /explain /regex /uml /pytest /doc /cv /ask",
-        "✍️ <b>Текст:</b> /improve /fix /shorten /expand /keywords /theses /style /tone",
-        "🖼 <b>Фото:</b> /upscale /compress /sticker /ocr /colors /exif",
-        "🗂 <b>Личное:</b> /diary /secret /task /habit /money",
-        "🛠 <b>Dev:</b> /hash /b64 /json /diff /commit /dockerfile /gitignore /cron",
-        "🛡 <b>Модерация:</b> /mute /warn /warnings /ban /unban /add /remove",
-        "⚙️ <b>Прочее:</b> /stats /health /report /tickets /close_ticket /intruders /prune",
+        "✍️ <b>" + ("Текст:" if ru else "Text:") + "</b> /improve /fix /shorten /expand /keywords /theses /style /tone",
+        "🖼 <b>" + ("Фото:" if ru else "Images:") + "</b> /upscale /compress /sticker /ocr /colors /exif",
+        "🗂 <b>" + ("Личное:" if ru else "Personal:") + "</b> /diary /secret /task /habit /money",
+        "🛠 <b>Dev:</b> /diff /commit /dockerfile /gitignore /json /b64 /hash /cron",
+        "🛡 <b>" + ("Модерация:" if ru else "Moderation:") + "</b> /mute /warn /warnings /ban /unban /add /remove",
+        "⚙️ <b>" + ("Прочее:" if ru else "Misc:") + "</b> /stats /health /report /tickets /close_ticket /intruders /prune",
         "  /export_whitelist /clear_session /stopwords",
         "",
         "🎩 " + ("Всё остальное — просто спроси словами." if ru else "Anything else — just ask."),
@@ -595,30 +625,38 @@ async def lang_cmd(update, context):
     uid = update.effective_user.id
     if not context.args:
         await update.message.reply_text(t(uid, "lang_current", cur=LANG.get(str(uid), "en")),
-            reply_markup=lang_keyboard(), parse_mode=ParseMode.HTML); return
+            reply_markup=lang_keyboard(), parse_mode=ParseMode.HTML)
+        return
     new = context.args[0].lower()
-    if new not in ("ru", "en"): return
-    LANG[str(uid)] = new; save_lang()
+    if new not in ("ru", "en"):
+        return
+    LANG[str(uid)] = new
+    save_lang()
     await update.message.reply_text(t(uid, "lang_switched", lang=new), parse_mode=ParseMode.HTML)
 
 
 async def mode_cmd(update, context):
     uid = update.effective_user.id
     if not context.args:
-        await update.message.reply_text("assistant | tutor | programmer | psychologist"); return
+        await update.message.reply_text("assistant | tutor | programmer | psychologist")
+        return
     m = context.args[0].lower()
-    if m not in ("assistant", "tutor", "programmer", "psychologist"): return
+    if m not in ("assistant", "tutor", "programmer", "psychologist"):
+        return
     USER_MODES[uid] = m
-    USER_HISTORY.pop(uid, None); clear_history_redis(uid)
+    USER_HISTORY.pop(uid, None)
+    clear_history_redis(uid)
     await update.message.reply_text(f"✅ {m}")
 
 
 async def vibe_cmd(update, context):
     uid = update.effective_user.id
     if not context.args:
-        await update.message.reply_text(f"🎭 {USER_VIBES.get(uid,'formal')}\n/vibe formal|casual|sarcastic"); return
+        await update.message.reply_text(f"🎭 {USER_VIBES.get(uid,'formal')}\n/vibe formal|casual|sarcastic")
+        return
     v = context.args[0].lower()
-    if v not in ("formal", "casual", "sarcastic"): return
+    if v not in ("formal", "casual", "sarcastic"):
+        return
     USER_VIBES[uid] = v
     await update.message.reply_text(f"🎭 {v}")
 
@@ -626,17 +664,20 @@ async def vibe_cmd(update, context):
 async def id_cmd(update, context):
     uid = update.effective_user.id
     name = update.effective_user.first_name or "—"
-    if update.effective_user.username: name += f" (@{update.effective_user.username})"
+    if update.effective_user.username:
+        name += f" (@{update.effective_user.username})"
     await update.message.reply_text(t(uid, "your_id", uid=uid, name=name), parse_mode=ParseMode.HTML)
 
 
 async def incognito_cmd(update, context):
-    uid = update.effective_user.id; INCOGNITO.add(uid)
+    uid = update.effective_user.id
+    INCOGNITO.add(uid)
     await update.message.reply_text(t(uid, "incog_on"))
 
 
 async def incognito_off_cmd(update, context):
-    uid = update.effective_user.id; INCOGNITO.discard(uid)
+    uid = update.effective_user.id
+    INCOGNITO.discard(uid)
     await update.message.reply_text(t(uid, "incog_off"))
 
 
@@ -645,19 +686,24 @@ async def text_handler(update, context):
     track_usage(uid)
     now = time.time()
     if uid in LAST_REQUEST and now - LAST_REQUEST[uid] < 2.0:
-        await update.message.reply_text(t(uid, "slow_down")); return
+        await update.message.reply_text(t(uid, "slow_down"))
+        return
     LAST_REQUEST[uid] = now
 
     msg = update.message.text or ""
 
     if matches(msg, ID_TRIGGERS):
-        await update.message.reply_text(identity_reply(uid), parse_mode=ParseMode.HTML); return
+        await update.message.reply_text(identity_reply(uid), parse_mode=ParseMode.HTML)
+        return
     if matches(msg, CREATOR_TRIGGERS):
-        await update.message.reply_text(creator_reply(uid), parse_mode=ParseMode.HTML); return
+        await update.message.reply_text(creator_reply(uid), parse_mode=ParseMode.HTML)
+        return
     if matches(msg, CLAIM_TRIGGERS):
-        await update.message.reply_text(claim_reply(uid), parse_mode=ParseMode.HTML); return
+        await update.message.reply_text(claim_reply(uid), parse_mode=ParseMode.HTML)
+        return
     if uid != OWNER_ID and any(n in msg.lower() for n in OWNER_NAMES):
-        await update.message.reply_text(creator_reply(uid), parse_mode=ParseMode.HTML); return
+        await update.message.reply_text(creator_reply(uid), parse_mode=ParseMode.HTML)
+        return
 
     if await natural_router(update, context, msg):
         return
@@ -670,10 +716,13 @@ async def text_handler(update, context):
     status = await update.message.reply_text(t(uid, "processing"), parse_mode=ParseMode.HTML)
     try:
         reply = await call_gemini(msg, uid)
-        try:    await status.edit_text(reply, parse_mode=ParseMode.MARKDOWN)
-        except:
-            try:    await status.edit_text(reply)
-            except: await update.message.reply_text(reply[:4000])
+        try:
+            await status.edit_text(reply, parse_mode=ParseMode.MARKDOWN)
+        except Exception:
+            try:
+                await status.edit_text(reply)
+            except Exception:
+                await update.message.reply_text(reply[:4000])
     except Exception as e:
         logger.exception(f"Text: {e}")
         await status.edit_text(t(uid, "req_error"))
@@ -685,21 +734,24 @@ async def text_handler(update, context):
 async def draw_cmd(update, context):
     uid = update.effective_user.id
     if not context.args:
-        await update.message.reply_text("🎨 /draw <desc>"); return
+        await update.message.reply_text("🎨 /draw <desc>")
+        return
     desc = " ".join(context.args)
 
     if not CF_ACCOUNT_ID or not CF_API_TOKEN:
-        await update.message.reply_text("⚠️ Cloudflare не настроен."); return
+        await update.message.reply_text("⚠️ Cloudflare не настроен.")
+        return
 
     await context.bot.send_chat_action(update.effective_chat.id, ChatAction.UPLOAD_PHOTO)
     status = await update.message.reply_text(t(uid, "draw_processing"), parse_mode=ParseMode.HTML)
     try:
         enhance = (
-            f"Convert this image request into a detailed English image-generation prompt.\n"
+            "Convert this image request into a detailed English image-generation prompt.\n"
             f"Request: {desc}\n\n"
-            f"Rules:\n- Preserve the original subject EXACTLY\n"
-            f"- Add composition, style, lighting, atmosphere, camera angle\n"
-            f"- Return ONLY the English prompt. No quotes. No explanations."
+            "Rules:\n"
+            "- Preserve the original subject EXACTLY\n"
+            "- Add composition, style, lighting, atmosphere, camera angle\n"
+            "- Return ONLY the English prompt. No quotes. No explanations."
         )
         enh = await call_gemini(enhance, uid)
         url = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/ai/run/{CF_MODEL}"
@@ -713,7 +765,9 @@ async def draw_cmd(update, context):
         img_bytes = base64.b64decode(data["result"]["image"])
         img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
         img.thumbnail((1280, 1280))
-        out = io.BytesIO(); img.save(out, format="JPEG", quality=90); out.seek(0)
+        out = io.BytesIO()
+        img.save(out, format="JPEG", quality=90)
+        out.seek(0)
         await update.message.reply_photo(photo=out, caption=f"🎨 <i>{desc[:100]}</i>", parse_mode=ParseMode.HTML)
         await status.delete()
     except Exception as e:
@@ -725,10 +779,13 @@ async def qr_cmd(update, context):
     uid = update.effective_user.id
     text = " ".join(context.args)
     if not text or len(text) > 1000:
-        await update.message.reply_text("🔳 1-1000 chars."); return
+        await update.message.reply_text("🔳 1-1000 chars.")
+        return
     try:
         img = qrcode.make(text)
-        out = io.BytesIO(); img.save(out, "PNG"); out.seek(0)
+        out = io.BytesIO()
+        img.save(out, "PNG")
+        out.seek(0)
         await update.message.reply_photo(photo=out)
     except Exception as e:
         logger.exception(f"QR: {e}")
@@ -738,7 +795,8 @@ async def tts_cmd(update, context):
     uid = update.effective_user.id
     text = " ".join(context.args)
     if not text or len(text) > 500:
-        await update.message.reply_text("🔊 1-500 chars."); return
+        await update.message.reply_text("🔊 1-500 chars.")
+        return
     try:
         out = io.BytesIO()
         gTTS(text=text, lang="ru" if LANG.get(str(uid), "en") == "ru" else "en").write_to_fp(out)
@@ -752,17 +810,20 @@ async def news_cmd(update, context):
     uid = update.effective_user.id
     topic = " ".join(context.args) if context.args else ""
     if not CURRENTS_KEY:
-        await update.message.reply_text("⚠️ Currents не настроен."); return
+        await update.message.reply_text("⚠️ Currents не настроен.")
+        return
     try:
         if topic:
             url = f"https://api.currentsapi.services/v1/search?apiKey={CURRENTS_KEY}&keywords={urllib.parse.quote(topic)}&language=ru&page_size=5"
         else:
             url = f"https://api.currentsapi.services/v1/latest-news?apiKey={CURRENTS_KEY}&language=ru&page_size=5"
-        r = requests.get(url, timeout=20); r.raise_for_status()
+        r = requests.get(url, timeout=20)
+        r.raise_for_status()
         data = r.json()
         news = data.get("news", [])[:5]
         if not news:
-            await update.message.reply_text("📰 Не нашёл новостей."); return
+            await update.message.reply_text("📰 Не нашёл новостей.")
+            return
         lines = [f"📰 <b>Новости{f' по {topic}' if topic else ''}</b>", ""]
         for n in news:
             lines.append(f"• <a href='{n.get('url','')}'>{n.get('title','')[:100]}</a>")
@@ -781,12 +842,14 @@ async def meme_cmd(update, context):
         else:
             url = "https://www.reddit.com/r/memes/hot.json?limit=5"
         headers = {"User-Agent": "JarvisBot/1.0"}
-        r = requests.get(url, headers=headers, timeout=15); r.raise_for_status()
+        r = requests.get(url, headers=headers, timeout=15)
+        r.raise_for_status()
         data = r.json()
         posts = [p["data"] for p in data.get("data", {}).get("children", [])
                  if not p["data"].get("is_video") and p["data"].get("post_hint") == "image"]
         if not posts:
-            await update.message.reply_text("😐 Мемов не нашёл."); return
+            await update.message.reply_text("😐 Мемов не нашёл.")
+            return
         p = random.choice(posts)
         await update.message.reply_photo(photo=p["url"], caption=p.get("title", "")[:200])
     except Exception as e:
@@ -798,17 +861,21 @@ async def search_cmd(update, context):
     uid = update.effective_user.id
     q = " ".join(context.args)
     if not q:
-        await update.message.reply_text("🔎 /search <запрос>"); return
+        await update.message.reply_text("🔎 /search <запрос>")
+        return
     try:
         url = f"https://api.duckduckgo.com/?q={urllib.parse.quote(q)}&format=json&no_html=1&skip_disambig=1"
-        r = requests.get(url, timeout=15); r.raise_for_status()
+        r = requests.get(url, timeout=15)
+        r.raise_for_status()
         data = r.json()
         abstract = data.get("AbstractText", "")
         answer = data.get("Answer", "")
         related = data.get("RelatedTopics", [])
         lines = [f"🔎 <b>{q}</b>", ""]
-        if answer: lines.append(f"✅ {answer}")
-        if abstract: lines.append(abstract[:500])
+        if answer:
+            lines.append(f"✅ {answer}")
+        if abstract:
+            lines.append(abstract[:500])
         for rt in related[:3]:
             if isinstance(rt, dict) and rt.get("Text"):
                 lines.append(f"• {rt['Text'][:120]}")
@@ -825,7 +892,8 @@ async def wiki_cmd(update, context):
     uid = update.effective_user.id
     q = " ".join(context.args)
     if not q:
-        await update.message.reply_text("📚 /wiki <запрос>"); return
+        await update.message.reply_text("📚 /wiki <запрос>")
+        return
     try:
         url = f"https://ru.wikipedia.org/api/rest_v1/page/summary/{urllib.parse.quote(q)}"
         r = requests.get(url, timeout=15)
@@ -849,7 +917,8 @@ async def wiki_cmd(update, context):
 async def translate_cmd(update, context):
     uid = update.effective_user.id
     if len(context.args) < 2:
-        await update.message.reply_text("🌐 /translate <lang> <text>"); return
+        await update.message.reply_text("🌐 /translate <lang> <text>")
+        return
     lang, text = context.args[0], " ".join(context.args[1:])
     try:
         reply = await call_gemini(f"Translate to {lang}. Return ONLY translation:\n\n{text}", uid)
@@ -861,10 +930,15 @@ async def translate_cmd(update, context):
 async def weather_cmd(update, context):
     city = " ".join(context.args) or "Moscow"
     try:
-        r = requests.get(f"https://wttr.in/{urllib.parse.quote(city)}?format=j1", timeout=20); r.raise_for_status()
+        r = requests.get(f"https://wttr.in/{urllib.parse.quote(city)}?format=j1", timeout=20)
+        r.raise_for_status()
         c = r.json()["current_condition"][0]
-        msg = (f"🌤 <b>{city}</b>\n\n  Temp: {c['temp_C']}°C\n  Feels: {c['FeelsLikeC']}°C\n"
-               f"  Wind: {c['windspeedKmph']} km/h\n  Humidity: {c['humidity']}%\n  {c['weatherDesc'][0]['value']}")
+        msg = (
+            f"🌤 <b>{city}</b>\n\n"
+            f"  Temp: {c['temp_C']}°C\n  Feels: {c['FeelsLikeC']}°C\n"
+            f"  Wind: {c['windspeedKmph']} km/h\n  Humidity: {c['humidity']}%\n"
+            f"  {c['weatherDesc'][0]['value']}"
+        )
         await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
     except Exception as e:
         await update.message.reply_text(f"⚠️ {e}")
@@ -873,7 +947,8 @@ async def weather_cmd(update, context):
 async def poll_cmd(update, context):
     parts = [p.strip() for p in " ".join(context.args).split("|") if p.strip()]
     if len(parts) < 3:
-        await update.message.reply_text("📊 /poll Q | A | B"); return
+        await update.message.reply_text("📊 /poll Q | A | B")
+        return
     try:
         await context.bot.send_poll(update.effective_chat.id, question=parts[0], options=parts[1:])
     except Exception as e:
@@ -886,9 +961,9 @@ async def quiz_cmd(update, context):
     try:
         prompt = f'Quiz about {topic}. JSON: {{"question":"","options":["A","B","C","D"],"correct_id":0,"explanation":""}}'
         reply = await call_gemini(prompt, uid, json_mode=True, system_instruction="Output valid JSON.")
-        def _x(t):
-            s, e = t.find("{"), t.rfind("}")
-            return t[s:e+1] if s != -1 and e != -1 else t
+        def _x(txt):
+            s, e = txt.find("{"), txt.rfind("}")
+            return txt[s:e+1] if s != -1 and e != -1 else txt
         data = json.loads(_x(reply))
         await context.bot.send_poll(update.effective_chat.id, question=data["question"], options=data["options"],
             type=Poll.QUIZ, correct_option_id=data["correct_id"], explanation=data.get("explanation"))
@@ -900,23 +975,30 @@ async def speed_cmd(update, context):
     uid = update.effective_user.id
     r = update.message.reply_to_message
     if not r or not r.voice:
-        await update.message.reply_text(t(uid, "no_voice")); return
-    if not context.args: return
+        await update.message.reply_text(t(uid, "no_voice"))
+        return
+    if not context.args:
+        return
     try:
         factor = float(context.args[0])
-        f = await r.voice.get_file(); data = await f.download_as_bytearray()
+        f = await r.voice.get_file()
+        data = await f.download_as_bytearray()
         audio = AudioSegment.from_file(io.BytesIO(data), format="ogg")
         fast = audio._spawn(audio.raw_data, overrides={"frame_rate": int(audio.frame_rate * factor)}).set_frame_rate(audio.frame_rate)
-        out = io.BytesIO(); fast.export(out, format="ogg", codec="libopus"); out.seek(0)
+        out = io.BytesIO()
+        fast.export(out, format="ogg", codec="libopus")
+        out.seek(0)
         await update.message.reply_voice(voice=out)
     except Exception as e:
         logger.exception(f"Speed: {e}")
 
 
 async def screenshot_cmd(update, context):
-    if not context.args: return
+    if not context.args:
+        return
     url = context.args[0]
-    if not url.startswith("http"): url = "https://" + url
+    if not url.startswith("http"):
+        url = "https://" + url
     try:
         r = requests.get(f"https://image.thum.io/get/width/1200/crop/900/{url}", timeout=30)
         await update.message.reply_photo(photo=io.BytesIO(r.content))
@@ -929,8 +1011,10 @@ async def summarize_cmd(update, context):
     text = ""
     if update.message.reply_to_message and update.message.reply_to_message.text:
         text = update.message.reply_to_message.text
-    elif context.args: text = " ".join(context.args)
-    if not text: return
+    elif context.args:
+        text = " ".join(context.args)
+    if not text:
+        return
     try:
         reply = await call_gemini(f"Summarize:\n\n{text}", uid)
         await update.message.reply_text(reply)
@@ -945,7 +1029,8 @@ def _decode_qr(data):
     try:
         arr = np.frombuffer(bytes(data), np.uint8)
         img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-        if img is None: return ""
+        if img is None:
+            return ""
         detector = cv2.QRCodeDetector()
         qr, _, _ = detector.detectAndDecode(img)
         return (qr or "").strip()
@@ -961,7 +1046,8 @@ async def photo_handler(update, context):
         data = await f.download_as_bytearray()
         qr = _decode_qr(bytes(data))
         if qr:
-            await update.message.reply_text(f"🔳 <b>QR</b>\n<code>{qr}</code>", parse_mode=ParseMode.HTML); return
+            await update.message.reply_text(f"🔳 <b>QR</b>\n<code>{qr}</code>", parse_mode=ParseMode.HTML)
+            return
         caption = update.message.caption or ("Опиши изображение." if LANG.get(str(uid)) == "ru" else "Describe.")
         part = types.Part.from_bytes(data=bytes(data), mime_type="image/jpeg")
         reply = await call_gemini(caption, uid, media_parts=[part])
@@ -976,11 +1062,13 @@ async def sticker_handler(update, context):
     try:
         st = update.message.sticker
         if st.is_animated or st.is_video:
-            await update.message.reply_text(t(uid, "sticker_animated")); return
+            await update.message.reply_text(t(uid, "sticker_animated"))
+            return
         f = await st.get_file()
         data = await f.download_as_bytearray()
         img = Image.open(io.BytesIO(data)).convert("RGBA")
-        out = io.BytesIO(); img.save(out, "PNG")
+        out = io.BytesIO()
+        img.save(out, "PNG")
         part = types.Part.from_bytes(data=out.getvalue(), mime_type="image/png")
         reply = await call_gemini("Explain this sticker's meme context.", uid, media_parts=[part])
         await update.message.reply_text(reply)
@@ -1008,10 +1096,12 @@ async def video_handler(update, context):
     uid = update.effective_user.id
     try:
         media = update.message.video_note or update.message.video
-        if not media: return
+        if not media:
+            return
         file_size = getattr(media, "file_size", 0) or 0
         if file_size > 20 * 1024 * 1024:
-            await update.message.reply_text("⚠️ Видео >20 MB, сэр."); return
+            await update.message.reply_text("⚠️ Видео >20 MB, сэр.")
+            return
         await update.message.reply_text(t(uid, "video_received"))
         f = await media.get_file()
         data = await f.download_as_bytearray()
@@ -1043,10 +1133,12 @@ async def document_handler(update, context):
     try:
         doc = update.message.document
         if doc.file_size > 20 * 1024 * 1024:
-            await update.message.reply_text("⚠️ Max 20 MB."); return
+            await update.message.reply_text("⚠️ Max 20 MB.")
+            return
         ext = os.path.splitext(doc.file_name)[1].lower()
         if ext in (".zip", ".rar", ".7z", ".tar", ".gz"):
-            await update.message.reply_text(t(uid, "zip_received")); return
+            await update.message.reply_text(t(uid, "zip_received"))
+            return
         f = await doc.get_file()
         data = await f.download_as_bytearray()
         if ext == ".pdf":
@@ -1058,7 +1150,8 @@ async def document_handler(update, context):
         else:
             text = data.decode("utf-8", errors="ignore")[:30000]
         if not text.strip():
-            await update.message.reply_text(t(uid, "no_text")); return
+            await update.message.reply_text(t(uid, "no_text"))
+            return
         reply = await call_gemini(f"Review this document:\n\n{text}", uid)
         await update.message.reply_text(reply[:4000])
     except Exception as e:
@@ -1074,37 +1167,60 @@ async def _ai(update, context, instruction, need_reply=False):
     if need_reply:
         r = update.message.reply_to_message
         if not r or not (r.text or r.caption):
-            await update.message.reply_text(t(uid, "no_reply")); return
+            await update.message.reply_text(t(uid, "no_reply"))
+            return
         text = r.text or r.caption
     else:
         text = " ".join(context.args)
     if not text and not need_reply:
-        await update.message.reply_text("✏️ Provide arguments."); return
+        await update.message.reply_text("✏️ Provide arguments.")
+        return
     status = await update.message.reply_text(t(uid, "processing"), parse_mode=ParseMode.HTML)
     try:
         reply = await call_gemini(f"{instruction}\n\nINPUT:\n{text}", uid)
-        try: await status.edit_text(reply[:4000], parse_mode=ParseMode.MARKDOWN)
-        except: await status.edit_text(reply[:4000])
+        try:
+            await status.edit_text(reply[:4000], parse_mode=ParseMode.MARKDOWN)
+        except Exception:
+            await status.edit_text(reply[:4000])
         for i in range(4000, len(reply), 4000):
             await update.message.reply_text(reply[i:i+4000])
     except Exception as e:
-        logger.exception(f"AI: {e}"); await status.edit_text(t(uid, "req_error"))
+        logger.exception(f"AI: {e}")
+        await status.edit_text(t(uid, "req_error"))
 
 
-async def review_cmd(update, context):    await _ai(update, context, "Review this code: bugs, security, style. Suggest fixes.", need_reply=True)
-async def regex_cmd(update, context):     await _ai(update, context, "Generate regex for the described task. Return only pattern + test example.")
-async def sql_cmd(update, context):       await _ai(update, context, "Write SQL for the task. Add one-line explanation.")
-async def explain_cmd(update, context):   await _ai(update, context, "Explain this code line by line.", need_reply=True)
-async def refactor_cmd(update, context):  await _ai(update, context, "Refactor this code. Return optimized version + change list.", need_reply=True)
-async def uml_cmd(update, context):       await _ai(update, context, "Return a PlantUML diagram for the described code.")
-async def pytest_cmd(update, context):    await _ai(update, context, "Generate pytest file for this code. Return only Python.", need_reply=True)
-async def doc_cmd(update, context):       await _ai(update, context, "Add PEP-8 docstrings and comments. Preserve logic.", need_reply=True)
-async def cv_cmd(update, context):        await _ai(update, context, "Structure raw bio into Markdown CV: Summary, Experience, Skills, Education.")
+async def review_cmd(update, context):
+    await _ai(update, context, "Review this code: bugs, security, style. Suggest fixes.", need_reply=True)
+
+async def regex_cmd(update, context):
+    await _ai(update, context, "Generate regex for the described task. Return only pattern + test example.")
+
+async def sql_cmd(update, context):
+    await _ai(update, context, "Write SQL for the task. Add one-line explanation.")
+
+async def explain_cmd(update, context):
+    await _ai(update, context, "Explain this code line by line.", need_reply=True)
+
+async def refactor_cmd(update, context):
+    await _ai(update, context, "Refactor this code. Return optimized version + change list.", need_reply=True)
+
+async def uml_cmd(update, context):
+    await _ai(update, context, "Return a PlantUML diagram for the described code.")
+
+async def pytest_cmd(update, context):
+    await _ai(update, context, "Generate pytest file for this code. Return only Python.", need_reply=True)
+
+async def doc_cmd(update, context):
+    await _ai(update, context, "Add PEP-8 docstrings and comments. Preserve logic.", need_reply=True)
+
+async def cv_cmd(update, context):
+    await _ai(update, context, "Structure raw bio into Markdown CV: Summary, Experience, Skills, Education.")
 
 
 async def translate_long_cmd(update, context):
     if len(context.args) < 2:
-        await update.message.reply_text("🌐 /translate_long <lang> <text>"); return
+        await update.message.reply_text("🌐 /translate_long <lang> <text>")
+        return
     lang, text = context.args[0], " ".join(context.args[1:])
     await _ai(update, context, f"Translate to {lang}. Preserve formatting.\n---\n{text}")
 
@@ -1113,7 +1229,8 @@ async def ask_cmd(update, context):
     uid = update.effective_user.id
     r = update.message.reply_to_message
     if not r or not r.text:
-        await update.message.reply_text(t(uid, "no_reply")); return
+        await update.message.reply_text(t(uid, "no_reply"))
+        return
     q = " ".join(context.args)
     doc = r.text[:30000]
     status = await update.message.reply_text(t(uid, "processing"), parse_mode=ParseMode.HTML)
@@ -1121,7 +1238,8 @@ async def ask_cmd(update, context):
         reply = await call_gemini(f"Answer based ONLY on this document.\n\n{doc}\n\nQ: {q}", uid)
         await status.edit_text(reply[:4000])
     except Exception as e:
-        logger.exception(f"Ask: {e}"); await status.edit_text(t(uid, "req_error"))
+        logger.exception(f"Ask: {e}")
+        await status.edit_text(t(uid, "req_error"))
 
 
 # ============================================================
@@ -1131,46 +1249,67 @@ async def _text_ai(update, context, instruction):
     uid = update.effective_user.id
     text = ""
     r = update.message.reply_to_message
-    if r and r.text: text = r.text
-    elif context.args: text = " ".join(context.args)
+    if r and r.text:
+        text = r.text
+    elif context.args:
+        text = " ".join(context.args)
     if not text:
-        await update.message.reply_text("✍️ Reply or provide text."); return
+        await update.message.reply_text("✍️ Reply or provide text.")
+        return
     status = await update.message.reply_text(t(uid, "processing"), parse_mode=ParseMode.HTML)
     try:
         reply = await call_gemini(f"{instruction}\n\n---\n{text}", uid)
-        try: await status.edit_text(reply[:4000], parse_mode=ParseMode.MARKDOWN)
-        except: await status.edit_text(reply[:4000])
+        try:
+            await status.edit_text(reply[:4000], parse_mode=ParseMode.MARKDOWN)
+        except Exception:
+            await status.edit_text(reply[:4000])
     except Exception as e:
-        logger.exception(f"Text AI: {e}"); await status.edit_text(t(uid, "req_error"))
+        logger.exception(f"Text AI: {e}")
+        await status.edit_text(t(uid, "req_error"))
 
 
-async def improve_cmd(update, context):  await _text_ai(update, context, "Improve wording and clarity. Return only improved text.")
-async def fix_cmd(update, context):      await _text_ai(update, context, "Fix grammar and spelling. Return only corrected text.")
-async def shorten_cmd(update, context):  await _text_ai(update, context, "Shorten to one paragraph.")
-async def expand_cmd(update, context):   await _text_ai(update, context, "Expand with detail and structure.")
-async def keywords_cmd(update, context): await _text_ai(update, context, "Extract 10 keywords, comma-separated.")
-async def theses_cmd(update, context):   await _text_ai(update, context, "Extract key theses as bullets.")
+async def improve_cmd(update, context):
+    await _text_ai(update, context, "Improve wording and clarity. Return only improved text.")
+
+async def fix_cmd(update, context):
+    await _text_ai(update, context, "Fix grammar and spelling. Return only corrected text.")
+
+async def shorten_cmd(update, context):
+    await _text_ai(update, context, "Shorten to one paragraph.")
+
+async def expand_cmd(update, context):
+    await _text_ai(update, context, "Expand with detail and structure.")
+
+async def keywords_cmd(update, context):
+    await _text_ai(update, context, "Extract 10 keywords, comma-separated.")
+
+async def theses_cmd(update, context):
+    await _text_ai(update, context, "Extract key theses as bullets.")
 
 
 async def style_cmd(update, context):
     if not context.args:
-        await update.message.reply_text("✍️ /style official"); return
+        await update.message.reply_text("✍️ /style official")
+        return
     style = context.args[0]
     r = update.message.reply_to_message
     text = r.text if r and r.text else " ".join(context.args[1:])
     if not text:
-        await update.message.reply_text("✍️ Provide text."); return
+        await update.message.reply_text("✍️ Provide text.")
+        return
     await _text_ai(update, context, f"Rewrite in {style} style.\n---\n{text}")
 
 
 async def tone_cmd(update, context):
     if not context.args:
-        await update.message.reply_text("✍️ /tone angry"); return
+        await update.message.reply_text("✍️ /tone angry")
+        return
     tone = context.args[0]
     r = update.message.reply_to_message
     text = r.text if r and r.text else " ".join(context.args[1:])
     if not text:
-        await update.message.reply_text("✍️ Provide text."); return
+        await update.message.reply_text("✍️ Provide text.")
+        return
     await _text_ai(update, context, f"Rewrite with {tone} tone.\n---\n{text}")
 
 
@@ -1180,12 +1319,16 @@ async def tone_cmd(update, context):
 async def upscale_cmd(update, context):
     r = update.message.reply_to_message
     if not r or not r.photo:
-        await update.message.reply_text("🖼 Reply to a photo."); return
+        await update.message.reply_text("🖼 Reply to a photo.")
+        return
     try:
-        f = await r.photo[-1].get_file(); data = await f.download_as_bytearray()
+        f = await r.photo[-1].get_file()
+        data = await f.download_as_bytearray()
         img = Image.open(io.BytesIO(data)).convert("RGB")
-        img = img.resize((img.width*2, img.height*2), Image.LANCZOS)
-        out = io.BytesIO(); img.save(out, "JPEG", quality=90); out.seek(0)
+        img = img.resize((img.width * 2, img.height * 2), Image.LANCZOS)
+        out = io.BytesIO()
+        img.save(out, "JPEG", quality=90)
+        out.seek(0)
         await update.message.reply_photo(photo=out)
     except Exception as e:
         await update.message.reply_text(f"⚠️ {e}")
@@ -1194,11 +1337,16 @@ async def upscale_cmd(update, context):
 async def compress_cmd(update, context):
     r = update.message.reply_to_message
     if not r or not r.photo:
-        await update.message.reply_text("🖼 Reply to a photo."); return
+        await update.message.reply_text("🖼 Reply to a photo.")
+        return
     try:
-        f = await r.photo[-1].get_file(); data = await f.download_as_bytearray()
-        img = Image.open(io.BytesIO(data)).convert("RGB"); img.thumbnail((1280, 1280))
-        out = io.BytesIO(); img.save(out, "JPEG", quality=70, optimize=True); out.seek(0)
+        f = await r.photo[-1].get_file()
+        data = await f.download_as_bytearray()
+        img = Image.open(io.BytesIO(data)).convert("RGB")
+        img.thumbnail((1280, 1280))
+        out = io.BytesIO()
+        img.save(out, "JPEG", quality=70, optimize=True)
+        out.seek(0)
         await update.message.reply_photo(photo=out)
     except Exception as e:
         await update.message.reply_text(f"⚠️ {e}")
@@ -1207,11 +1355,17 @@ async def compress_cmd(update, context):
 async def sticker_cmd(update, context):
     r = update.message.reply_to_message
     if not r or not r.photo:
-        await update.message.reply_text("🎭 Reply to a photo."); return
+        await update.message.reply_text("🎭 Reply to a photo.")
+        return
     try:
-        f = await r.photo[-1].get_file(); data = await f.download_as_bytearray()
-        img = Image.open(io.BytesIO(data)).convert("RGBA"); img.thumbnail((512, 512))
-        out = io.BytesIO(); img.save(out, "PNG"); out.seek(0); out.name = "sticker.png"
+        f = await r.photo[-1].get_file()
+        data = await f.download_as_bytearray()
+        img = Image.open(io.BytesIO(data)).convert("RGBA")
+        img.thumbnail((512, 512))
+        out = io.BytesIO()
+        img.save(out, "PNG")
+        out.seek(0)
+        out.name = "sticker.png"
         await update.message.reply_document(document=out, filename="sticker.png")
     except Exception as e:
         await update.message.reply_text(f"⚠️ {e}")
@@ -1221,8 +1375,10 @@ async def ocr_cmd(update, context):
     uid = update.effective_user.id
     r = update.message.reply_to_message
     if not r or not r.photo:
-        await update.message.reply_text("🔍 Reply to a photo."); return
-    f = await r.photo[-1].get_file(); data = await f.download_as_bytearray()
+        await update.message.reply_text("🔍 Reply to a photo.")
+        return
+    f = await r.photo[-1].get_file()
+    data = await f.download_as_bytearray()
     part = types.Part.from_bytes(data=bytes(data), mime_type="image/jpeg")
     reply = await call_gemini("Extract ALL text from the image. Return only text.", uid, media_parts=[part])
     await update.message.reply_text(reply)
@@ -1231,10 +1387,13 @@ async def ocr_cmd(update, context):
 async def colors_cmd(update, context):
     r = update.message.reply_to_message
     if not r or not r.photo:
-        await update.message.reply_text("🎨 Reply to a photo."); return
+        await update.message.reply_text("🎨 Reply to a photo.")
+        return
     try:
-        f = await r.photo[-1].get_file(); data = await f.download_as_bytearray()
-        img = Image.open(io.BytesIO(data)).convert("RGB"); img.thumbnail((100, 100))
+        f = await r.photo[-1].get_file()
+        data = await f.download_as_bytearray()
+        img = Image.open(io.BytesIO(data)).convert("RGB")
+        img.thumbnail((100, 100))
         from collections import Counter
         common = Counter(img.getdata()).most_common(8)
         lines = ["🎨 <b>Colors</b>", ""]
@@ -1248,13 +1407,16 @@ async def colors_cmd(update, context):
 async def exif_cmd(update, context):
     r = update.message.reply_to_message
     if not r or not r.photo:
-        await update.message.reply_text("📷 Reply to a photo."); return
+        await update.message.reply_text("📷 Reply to a photo.")
+        return
     try:
-        f = await r.photo[-1].get_file(); data = await f.download_as_bytearray()
+        f = await r.photo[-1].get_file()
+        data = await f.download_as_bytearray()
         img = Image.open(io.BytesIO(data))
         exif = img.getexif()
         if not exif:
-            await update.message.reply_text("📷 No EXIF."); return
+            await update.message.reply_text("📷 No EXIF.")
+            return
         lines = ["📷 <b>EXIF</b>", ""]
         for k, v in list(exif.items())[:20]:
             lines.append(f"  {k}: {str(v)[:80]}")
@@ -1268,40 +1430,53 @@ async def exif_cmd(update, context):
 # ============================================================
 @owner_only
 async def diary_cmd(update, context):
-    ud = USERDATA.setdefault(str(OWNER_ID), {}); diary = ud.setdefault("diary", [])
+    ud = USERDATA.setdefault(str(OWNER_ID), {})
+    diary = ud.setdefault("diary", [])
     if not context.args or context.args[0].lower() == "list":
         if not diary:
-            await update.message.reply_text("📔 /diary add text | list | clear"); return
+            await update.message.reply_text("📔 /diary add text | list | clear")
+            return
         lines = ["📔 <b>Diary</b>", ""]
         for i, x in enumerate(diary[-20:], 1):
             lines.append(f"  {i}. [{x['at'][:16]}] {x['text'][:80]}")
-        await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML); return
+        await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+        return
     sub = context.args[0].lower()
     if sub == "add":
         text = " ".join(context.args[1:])
-        if text: diary.append({"at": datetime.now().isoformat(), "text": text}); save_userdata()
+        if text:
+            diary.append({"at": datetime.now().isoformat(), "text": text})
+            save_userdata()
         await update.message.reply_text("📔 Added.")
     elif sub == "clear":
-        ud["diary"] = []; save_userdata(); await update.message.reply_text("🗑")
+        ud["diary"] = []
+        save_userdata()
+        await update.message.reply_text("🗑")
 
 
 @owner_only
 async def secret_cmd(update, context):
     sec = USERDATA.setdefault(str(OWNER_ID), {}).setdefault("secrets", {})
     if len(context.args) < 1:
-        await update.message.reply_text("🔐 /secret set|get|list|del"); return
+        await update.message.reply_text("🔐 /secret set|get|list|del")
+        return
     sub = context.args[0].lower()
     if sub == "set" and len(context.args) >= 3:
         sec[context.args[1]] = base64.b64encode(" ".join(context.args[2:]).encode()).decode()
-        save_userdata(); await update.message.reply_text("🔐 Saved.")
+        save_userdata()
+        await update.message.reply_text("🔐 Saved.")
     elif sub == "get" and len(context.args) == 2:
         v = sec.get(context.args[1])
-        if v: await update.message.reply_text(f"<code>{base64.b64decode(v.encode()).decode()}</code>", parse_mode=ParseMode.HTML)
-        else: await update.message.reply_text("❌")
+        if v:
+            await update.message.reply_text(f"<code>{base64.b64decode(v.encode()).decode()}</code>", parse_mode=ParseMode.HTML)
+        else:
+            await update.message.reply_text("❌")
     elif sub == "list":
         await update.message.reply_text("🔐 " + ", ".join(sec.keys()) if sec else "📭")
     elif sub == "del" and len(context.args) == 2:
-        sec.pop(context.args[1], None); save_userdata(); await update.message.reply_text("🗑")
+        sec.pop(context.args[1], None)
+        save_userdata()
+        await update.message.reply_text("🗑")
 
 
 @owner_only
@@ -1309,23 +1484,35 @@ async def task_cmd(update, context):
     tasks = USERDATA.setdefault(str(OWNER_ID), {}).setdefault("tasks", [])
     if not context.args or context.args[0].lower() == "list":
         if not tasks:
-            await update.message.reply_text("✅ /task add text | list | done N | del N"); return
+            await update.message.reply_text("✅ /task add text | list | done N | del N")
+            return
         lines = ["✅ <b>Tasks</b>", ""]
         for i, x in enumerate(tasks, 1):
             m = "✅" if x.get("done") else "⬜"
             lines.append(f"  {i}. {m} {x['text']}")
-        await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML); return
+        await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+        return
     sub = context.args[0].lower()
     if sub == "add":
         t_text = " ".join(context.args[1:])
-        if t_text: tasks.append({"text": t_text, "done": False}); save_userdata()
+        if t_text:
+            tasks.append({"text": t_text, "done": False})
+            save_userdata()
         await update.message.reply_text("✅")
     elif sub == "done":
-        try: tasks[int(context.args[1])-1]["done"] = True; save_userdata(); await update.message.reply_text("✅")
-        except: pass
+        try:
+            tasks[int(context.args[1]) - 1]["done"] = True
+            save_userdata()
+            await update.message.reply_text("✅")
+        except Exception:
+            pass
     elif sub == "del":
-        try: tasks.pop(int(context.args[1])-1); save_userdata(); await update.message.reply_text("🗑")
-        except: pass
+        try:
+            tasks.pop(int(context.args[1]) - 1)
+            save_userdata()
+            await update.message.reply_text("🗑")
+        except Exception:
+            pass
 
 
 @owner_only
@@ -1333,23 +1520,30 @@ async def habit_cmd(update, context):
     habits = USERDATA.setdefault(str(OWNER_ID), {}).setdefault("habits", {})
     if not context.args or context.args[0].lower() == "list":
         if not habits:
-            await update.message.reply_text("🎯 /habit add read | log read | list"); return
+            await update.message.reply_text("🎯 /habit add read | log read | list")
+            return
         lines = ["🎯 <b>Habits</b>", ""]
         for name, d in habits.items():
-            lines.append(f"  • {name}: 🔥 {d.get('streak',0)}")
-        await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML); return    sub = context.args[0].lower()
+            lines.append(f"  • {name}: 🔥 {d.get('streak', 0)}")
+        await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+        return
+    sub = context.args[0].lower()
     if sub == "add":
         name = " ".join(context.args[1:])
-        if name: habits[name] = {"streak": 0, "last": ""}; save_userdata()
+        if name:
+            habits[name] = {"streak": 0, "last": ""}
+            save_userdata()
         await update.message.reply_text(f"🎯 {name}")
     elif sub == "log":
         name = " ".join(context.args[1:])
         if name in habits:
             today = datetime.now().date().isoformat()
             if habits[name]["last"] == today:
-                await update.message.reply_text("⚠️ Already today."); return
+                await update.message.reply_text("⚠️ Already today.")
+                return
             habits[name]["streak"] = habits[name].get("streak", 0) + 1
-            habits[name]["last"] = today; save_userdata()
+            habits[name]["last"] = today
+            save_userdata()
             await update.message.reply_text(f"🎯 {name}: 🔥 {habits[name]['streak']}")
 
 
@@ -1361,19 +1555,29 @@ async def money_cmd(update, context):
         lines = [f"💰 Balance: <b>{bal}</b>", ""]
         for x in money[-10:]:
             lines.append(f"  [{x['at'][:10]}] {x['amount']:+} — {x['note']}")
-        await update.message.reply_text("\n".join(lines) if lines else "💰 Empty.", parse_mode=ParseMode.HTML); return
+        await update.message.reply_text("\n".join(lines) if lines else "💰 Empty.", parse_mode=ParseMode.HTML)
+        return
     if context.args[0].lower() == "add" and len(context.args) >= 2:
         try:
-            money.append({"amount": float(context.args[1]), "note": " ".join(context.args[2:]), "at": datetime.now().isoformat()})
-            save_userdata(); await update.message.reply_text(f"💰 {context.args[1]}")
-        except: await update.message.reply_text("💰 /money add 1000 note")
+            money.append({
+                "amount": float(context.args[1]),
+                "note": " ".join(context.args[2:]),
+                "at": datetime.now().isoformat(),
+            })
+            save_userdata()
+            await update.message.reply_text(f"💰 {context.args[1]}")
+        except Exception:
+            await update.message.reply_text("💰 /money add 1000 note")
 
 
 # ============================================================
 #  DEV TOOLS
 # ============================================================
-async def diff_cmd(update, context):   await _text_ai(update, context, "Explain this git diff in plain language.")
-async def commit_cmd(update, context): await _text_ai(update, context, "Generate Conventional Commit message for this diff.")
+async def diff_cmd(update, context):
+    await _text_ai(update, context, "Explain this git diff in plain language.")
+
+async def commit_cmd(update, context):
+    await _text_ai(update, context, "Generate Conventional Commit message for this diff.")
 
 
 async def dockerfile_cmd(update, context):
@@ -1394,7 +1598,8 @@ async def json_cmd(update, context):
     r = update.message.reply_to_message
     text = r.text if r and r.text else " ".join(context.args)
     if not text:
-        await update.message.reply_text("📋 Provide JSON."); return
+        await update.message.reply_text("📋 Provide JSON.")
+        return
     try:
         pretty = json.dumps(json.loads(text), indent=2, ensure_ascii=False)
         await update.message.reply_text(f"<pre>{pretty[:3800]}</pre>", parse_mode=ParseMode.HTML)
@@ -1404,7 +1609,8 @@ async def json_cmd(update, context):
 
 async def b64_cmd(update, context):
     if len(context.args) < 2:
-        await update.message.reply_text("🔡 /b64 encode text"); return
+        await update.message.reply_text("🔡 /b64 encode text")
+        return
     mode, text = context.args[0].lower(), " ".join(context.args[1:])
     try:
         out = base64.b64encode(text.encode()).decode() if mode == "encode" else base64.b64decode(text.encode()).decode()
@@ -1416,9 +1622,11 @@ async def b64_cmd(update, context):
 async def hash_cmd(update, context):
     text = " ".join(context.args)
     r = update.message.reply_to_message
-    if r and r.text: text = r.text
+    if r and r.text:
+        text = r.text
     if not text:
-        await update.message.reply_text("🔒 /hash text"); return
+        await update.message.reply_text("🔒 /hash text")
+        return
     await update.message.reply_text(
         f"SHA256: <code>{hashlib.sha256(text.encode()).hexdigest()}</code>\n"
         f"MD5: <code>{hashlib.md5(text.encode()).hexdigest()}</code>",
@@ -1428,7 +1636,8 @@ async def hash_cmd(update, context):
 async def cron_cmd(update, context):
     expr = " ".join(context.args)
     if not expr:
-        await update.message.reply_text('⏰ /cron "0 0 * * *"'); return
+        await update.message.reply_text('⏰ /cron "0 0 * * *"')
+        return
     reply = await call_gemini(f"Explain cron expression: {expr}", update.effective_user.id)
     await update.message.reply_text(reply)
 
@@ -1451,7 +1660,8 @@ def admin_kb():
 
 @owner_only
 async def admin_panel(update, context):
-    await update.message.reply_text("🛡 <b>J.A.R.V.I.S. — Панель управления</b>\n\nВыбери раздел:",
+    await update.message.reply_text(
+        "🛡 <b>J.A.R.V.I.S. — Панель управления</b>\n\nВыбери раздел:",
         reply_markup=admin_kb(), parse_mode=ParseMode.HTML)
 
 
@@ -1459,7 +1669,8 @@ async def on_admin_callback(update, context):
     q = update.callback_query
     await q.answer()
     uid = update.effective_user.id
-    if uid != OWNER_ID: return
+    if uid != OWNER_ID:
+        return
 
     data = q.data
     if data == "adm_status":
@@ -1469,11 +1680,14 @@ async def on_admin_callback(update, context):
             dsk = psutil.disk_usage("/").percent
             up = int(time.time() - STARTED_AT)
             h, m, s = up // 3600, (up % 3600) // 60, up % 60
-            txt = (f"📊 <b>Система</b>\n\n  CPU  │ {cpu}%\n  RAM  │ {ram}%\n  Disk │ {dsk}%\n"
-                   f"  Uptime │ {h}h {m}m {s}s\n"
-                   f"  Upstash │ {'✅' if redis_client else '❌'}\n"
-                   f"  Cloudflare │ {'✅' if CF_ACCOUNT_ID else '❌'}\n"
-                   f"  Currents │ {'✅' if CURRENTS_KEY else '❌'}")
+            txt = (
+                f"📊 <b>Система</b>\n\n"
+                f"  CPU  │ {cpu}%\n  RAM  │ {ram}%\n  Disk │ {dsk}%\n"
+                f"  Uptime │ {h}h {m}m {s}s\n"
+                f"  Upstash │ {'✅' if redis_client else '❌'}\n"
+                f"  Cloudflare │ {'✅' if CF_ACCOUNT_ID else '❌'}\n"
+                f"  Currents │ {'✅' if CURRENTS_KEY else '❌'}"
+            )
         except Exception as e:
             txt = f"⚠️ {e}"
         await q.edit_message_text(txt, reply_markup=admin_kb(), parse_mode=ParseMode.HTML)
@@ -1487,10 +1701,13 @@ async def on_admin_callback(update, context):
         await q.edit_message_text("\n".join(lines), reply_markup=admin_kb(), parse_mode=ParseMode.HTML)
 
     elif data == "adm_mod":
-        txt = (f"🚫 <b>Модерация</b>\n\nЗабанено: {len(state['BANNED'])}\n"
-               f"В муте: {len(state['MUTED'])}\n"
-               f"Варнов: {sum(len(w) for w in state['WARNINGS'].values())}\n\n"
-               f"/ban /unban /mute /warn /warnings /intruders /prune")
+        txt = (
+            f"🚫 <b>Модерация</b>\n\n"
+            f"Забанено: {len(state['BANNED'])}\n"
+            f"В муте: {len(state['MUTED'])}\n"
+            f"Варнов: {sum(len(w) for w in state['WARNINGS'].values())}\n\n"
+            f"/ban /unban /mute /warn /warnings /intruders /prune"
+        )
         await q.edit_message_text(txt, reply_markup=admin_kb(), parse_mode=ParseMode.HTML)
 
     elif data == "adm_broadcast":
@@ -1509,34 +1726,47 @@ async def on_admin_callback(update, context):
         await q.edit_message_text("💾 Используйте: /backup", reply_markup=admin_kb())
 
     elif data == "adm_modes":
-        txt = f"🔒 <b>Режимы</b>\n\nSilent: {'✅' if SILENT_MODE else '❌'}\nLockdown: {'✅' if LOCKDOWN else '❌'}\n\n/silent on|off | /lockdown on|off"
+        txt = (
+            f"🔒 <b>Режимы</b>\n\n"
+            f"Silent: {'✅' if SILENT_MODE else '❌'}\n"
+            f"Lockdown: {'✅' if LOCKDOWN else '❌'}\n\n"
+            f"/silent on|off | /lockdown on|off"
+        )
         await q.edit_message_text(txt, reply_markup=admin_kb(), parse_mode=ParseMode.HTML)
 
     elif data == "adm_stats":
         top = sorted(USER_STATS.items(), key=lambda kv: kv[1].get("messages", 0), reverse=True)[:10]
         lines = ["📈 <b>Топ пользователей</b>", ""]
         for u, s in top:
-            lines.append(f"  <code>{u}</code> — {s.get('messages',0)} msgs")
+            lines.append(f"  <code>{u}</code> — {s.get('messages', 0)} msgs")
         await q.edit_message_text("\n".join(lines) or "📈 Пусто",
             reply_markup=admin_kb(), parse_mode=ParseMode.HTML)
 
 
 @owner_only
 async def add_whitelist(update, context):
-    if not context.args: return
-    try: uid = int(context.args[0])
-    except: return
-    if uid not in state["WHITELIST"]: state["WHITELIST"].append(uid)
+    if not context.args:
+        return
+    try:
+        uid = int(context.args[0])
+    except Exception:
+        return
+    if uid not in state["WHITELIST"]:
+        state["WHITELIST"].append(uid)
     save_state()
     await update.message.reply_text(f"✅ {uid} добавлен.")
 
 
 @owner_only
 async def remove_whitelist(update, context):
-    if not context.args: return
-    try: uid = int(context.args[0])
-    except: return
-    if uid in state["WHITELIST"]: state["WHITELIST"].remove(uid)
+    if not context.args:
+        return
+    try:
+        uid = int(context.args[0])
+    except Exception:
+        return
+    if uid in state["WHITELIST"]:
+        state["WHITELIST"].remove(uid)
     save_state()
     await update.message.reply_text(f"🗑 {uid} удалён.")
 
@@ -1550,22 +1780,33 @@ async def whitelist_list(update, context):
 
 
 async def ban_user(update, context):
-    if update.effective_user.id != OWNER_ID: return
-    if not context.args: return
-    try: uid = int(context.args[0])
-    except: return
-    if uid not in state["BANNED"]: state["BANNED"].append(uid)
-    if uid in state["WHITELIST"]: state["WHITELIST"].remove(uid)
+    if update.effective_user.id != OWNER_ID:
+        return
+    if not context.args:
+        return
+    try:
+        uid = int(context.args[0])
+    except Exception:
+        return
+    if uid not in state["BANNED"]:
+        state["BANNED"].append(uid)
+    if uid in state["WHITELIST"]:
+        state["WHITELIST"].remove(uid)
     save_state()
     await update.message.reply_text(f"🚫 {uid} бан.")
 
 
 async def unban_user(update, context):
-    if update.effective_user.id != OWNER_ID: return
-    if not context.args: return
-    try: uid = int(context.args[0])
-    except: return
-    if uid in state["BANNED"]: state["BANNED"].remove(uid)
+    if update.effective_user.id != OWNER_ID:
+        return
+    if not context.args:
+        return
+    try:
+        uid = int(context.args[0])
+    except Exception:
+        return
+    if uid in state["BANNED"]:
+        state["BANNED"].remove(uid)
     save_state()
     await update.message.reply_text(f"✅ {uid} разбан.")
 
@@ -1573,15 +1814,19 @@ async def unban_user(update, context):
 @owner_only
 async def mute_user(update, context):
     if len(context.args) < 2:
-        await update.message.reply_text("🔇 /mute <id> <2h|perm>"); return
-    try: uid = int(context.args[0])
-    except: return
+        await update.message.reply_text("🔇 /mute <id> <2h|perm>")
+        return
+    try:
+        uid = int(context.args[0])
+    except Exception:
+        return
     d = context.args[1]
     if d == "perm":
         exp = datetime.now() + timedelta(days=36500)
     else:
         m = re.match(r"^(\d+)([hmd])$", d.lower())
-        if not m: return
+        if not m:
+            return
         v, u = int(m.group(1)), m.group(2)
         delta = {"h": timedelta(hours=v), "d": timedelta(days=v), "m": timedelta(minutes=v)}[u]
         exp = datetime.now() + delta
@@ -1592,27 +1837,33 @@ async def mute_user(update, context):
 
 @owner_only
 async def warn_user(update, context):
-    if len(context.args) < 2: return
-    try: uid = int(context.args[0])
-    except: return
+    if len(context.args) < 2:
+        return
+    try:
+        uid = int(context.args[0])
+    except Exception:
+        return
     reason = " ".join(context.args[1:])
     wl = state["WARNINGS"].setdefault(str(uid), [])
     wl.append({"reason": reason, "at": datetime.now().isoformat()})
     save_state()
     await update.message.reply_text(f"⚠️ Варн {len(wl)}/3: {uid}. {reason}")
     if len(wl) >= 3:
-        if uid not in state["BANNED"]: state["BANNED"].append(uid)
+        if uid not in state["BANNED"]:
+            state["BANNED"].append(uid)
         save_state()
         await update.message.reply_text(f"🚨 Авто-бан: {uid}")
 
 
 @owner_only
 async def warnings_list(update, context):
-    if not context.args: return
+    if not context.args:
+        return
     uid = str(context.args[0])
     warns = state["WARNINGS"].get(uid, [])
     if not warns:
-        await update.message.reply_text("✅ Нет."); return
+        await update.message.reply_text("✅ Нет.")
+        return
     lines = [f"⚠️ Варны {uid}:", ""]
     for i, w in enumerate(warns, 1):
         lines.append(f"  {i}. {w['at'][:16]} — {w['reason']}")
@@ -1622,13 +1873,15 @@ async def warnings_list(update, context):
 @owner_only
 async def broadcast_msg(update, context):
     text = " ".join(context.args)
-    if not text: return
+    if not text:
+        return
     sent = failed = 0
     for u in state["WHITELIST"]:
         try:
             await context.bot.send_message(u, f"📢 <b>Broadcast</b>\n\n{text}", parse_mode=ParseMode.HTML)
             sent += 1
-        except: failed += 1
+        except Exception:
+            failed += 1
     await update.message.reply_text(f"📢 {sent}/{failed}")
 
 
@@ -1637,7 +1890,8 @@ async def backup_cmd(update, context):
     zip_name = "jarvis_backup.zip"
     with zipfile.ZipFile(zip_name, "w") as z:
         for f in ("main.py", "requirements.txt", "whitelist.json", "config.json"):
-            if os.path.exists(f): z.write(f)
+            if os.path.exists(f):
+                z.write(f)
     await update.message.reply_document(document=open(zip_name, "rb"), filename=zip_name)
     os.remove(zip_name)
 
@@ -1654,7 +1908,8 @@ async def logs_cmd(update, context):
 async def silent_cmd(update, context):
     global SILENT_MODE
     if not context.args:
-        await update.message.reply_text(f"🤫 {'ON' if SILENT_MODE else 'OFF'}"); return
+        await update.message.reply_text(f"🤫 {'ON' if SILENT_MODE else 'OFF'}")
+        return
     SILENT_MODE = context.args[0].lower() == "on"
     await update.message.reply_text(f"🤫 Silent {'ON' if SILENT_MODE else 'OFF'}")
 
@@ -1663,7 +1918,8 @@ async def silent_cmd(update, context):
 async def lockdown_cmd(update, context):
     global LOCKDOWN
     if not context.args:
-        await update.message.reply_text(f"🔒 {'ON' if LOCKDOWN else 'OFF'}"); return
+        await update.message.reply_text(f"🔒 {'ON' if LOCKDOWN else 'OFF'}")
+        return
     LOCKDOWN = context.args[0].lower() == "on"
     await update.message.reply_text(f"🔒 Lockdown {'ON' if LOCKDOWN else 'OFF'}")
 
@@ -1673,14 +1929,15 @@ async def stats_cmd(update, context):
     top = sorted(USER_STATS.items(), key=lambda kv: kv[1].get("messages", 0), reverse=True)[:10]
     lines = ["📈 <b>Топ</b>", ""]
     for u, s in top:
-        lines.append(f"  <code>{u}</code> — {s.get('messages',0)} msgs")
+        lines.append(f"  <code>{u}</code> — {s.get('messages', 0)} msgs")
     await update.message.reply_text("\n".join(lines) or "📈 Пусто", parse_mode=ParseMode.HTML)
 
 
 @owner_only
 async def health_cmd(update, context):
     try:
-        cpu = psutil.cpu_percent(interval=0.5); ram = psutil.virtual_memory().percent
+        cpu = psutil.cpu_percent(interval=0.5)
+        ram = psutil.virtual_memory().percent
         dsk = psutil.disk_usage("/").percent
         up = int(time.time() - STARTED_AT)
         h, m, s = up // 3600, (up % 3600) // 60, up % 60
@@ -1695,22 +1952,26 @@ async def report_cmd(update, context):
     uid = update.effective_user.id
     text = " ".join(context.args)
     if not text:
-        await update.message.reply_text("📩 /report <issue>"); return
+        await update.message.reply_text("📩 /report <issue>")
+        return
     ticket = {"id": len(TICKETS) + 1, "user_id": uid, "text": text, "status": "open",
               "at": datetime.now().isoformat()}
-    TICKETS.append(ticket); save_tickets()
+    TICKETS.append(ticket)
+    save_tickets()
     await update.message.reply_text(f"✅ Тикет #{ticket['id']}")
     try:
         await context.bot.send_message(OWNER_ID, f"📩 #{ticket['id']} от <code>{uid}</code>: {text}",
             parse_mode=ParseMode.HTML)
-    except: pass
+    except Exception:
+        pass
 
 
 @owner_only
 async def tickets_cmd(update, context):
     opens = [x for x in TICKETS if x.get("status") == "open"]
     if not opens:
-        await update.message.reply_text("📭 Нет тикетов."); return
+        await update.message.reply_text("📭 Нет тикетов.")
+        return
     lines = ["📋 <b>Тикеты</b>", ""]
     for x in opens[:20]:
         lines.append(f"  #{x['id']} │ <code>{x['user_id']}</code> │ {x['text'][:60]}")
@@ -1719,40 +1980,52 @@ async def tickets_cmd(update, context):
 
 @owner_only
 async def close_ticket_cmd(update, context):
-    if not context.args: return
-    try: tid = int(context.args[0])
-    except: return
+    if not context.args:
+        return
+    try:
+        tid = int(context.args[0])
+    except Exception:
+        return
     for x in TICKETS:
         if x["id"] == tid:
-            x["status"] = "closed"; save_tickets()
-            await update.message.reply_text(f"✅ Тикет {tid} закрыт."); return
+            x["status"] = "closed"
+            save_tickets()
+            await update.message.reply_text(f"✅ Тикет {tid} закрыт.")
+            return
 
 
 @owner_only
 async def intruders_cmd(update, context):
     if not os.path.exists(INTRUDER_FILE):
-        await update.message.reply_text("📭 Пусто."); return
+        await update.message.reply_text("📭 Пусто.")
+        return
     with open(INTRUDER_FILE) as f:
-        try: data = json.load(f)
-        except: data = []
+        try:
+            data = json.load(f)
+        except Exception:
+            data = []
     if not data:
-        await update.message.reply_text("📭 Пусто."); return
+        await update.message.reply_text("📭 Пусто.")
+        return
     lines = ["🚨 <b>Нарушители</b>", ""]
     seen = set()
     for x in data[-30:]:
         u = x.get("user_id")
-        if u in seen: continue
+        if u in seen:
+            continue
         seen.add(u)
-        lines.append(f"  <code>{u}</code> @{x.get('username','—')}")
+        lines.append(f"  <code>{u}</code> @{x.get('username', '—')}")
     await update.message.reply_text("\n".join(lines[:30]), parse_mode=ParseMode.HTML)
 
 
 @owner_only
 async def prune_cmd(update, context):
     if not context.args:
-        await update.message.reply_text("🪓 /prune 30d"); return
+        await update.message.reply_text("🪓 /prune 30d")
+        return
     m = re.match(r"^(\d+)([dh])$", context.args[0].lower())
-    if not m: return
+    if not m:
+        return
     v, u = int(m.group(1)), m.group(2)
     delta = timedelta(hours=v) if u == "h" else timedelta(days=v)
     thr = datetime.now() - delta
@@ -1760,42 +2033,53 @@ async def prune_cmd(update, context):
     for suid, s in list(USER_STATS.items()):
         last = s.get("last_seen")
         if last and datetime.fromisoformat(last) < thr:
-            try: state["WHITELIST"].remove(int(suid)); removed += 1
-            except: pass
+            try:
+                state["WHITELIST"].remove(int(suid))
+                removed += 1
+            except Exception:
+                pass
     save_state()
     await update.message.reply_text(f"🪓 Удалено: {removed}")
 
 
 @owner_only
 async def export_whitelist_cmd(update, context):
-    _write_json("whitelist_export.json", {"whitelist": state["WHITELIST"],
-        "exported_at": datetime.now().isoformat()})
+    _write_json("whitelist_export.json",
+        {"whitelist": state["WHITELIST"], "exported_at": datetime.now().isoformat()})
     await update.message.reply_document(document=open("whitelist_export.json", "rb"))
     os.remove("whitelist_export.json")
 
 
 @owner_only
 async def clear_session_cmd(update, context):
-    USER_HISTORY.clear(); USER_MODES.clear(); USER_VIBES.clear()
-    INCOGNITO.clear(); LAST_REQUEST.clear()
+    USER_HISTORY.clear()
+    USER_MODES.clear()
+    USER_VIBES.clear()
+    INCOGNITO.clear()
+    LAST_REQUEST.clear()
     if redis_client:
         try:
             keys = redis_client.keys("jarvis:hist:*")
-            for k in keys or []: redis_client.delete(k)
-        except: pass
+            for k in keys or []:
+                redis_client.delete(k)
+        except Exception:
+            pass
     await update.message.reply_text("🧹 Сессия очищена.")
 
 
 @owner_only
 async def stopwords_cmd(update, context):
     if not context.args:
-        await update.message.reply_text("🛑 " + ", ".join(STOP_WORDS)); return
+        await update.message.reply_text("🛑 " + ", ".join(STOP_WORDS))
+        return
     action = context.args[0].lower()
     if action == "add" and len(context.args) > 1:
-        STOP_WORDS.append(" ".join(context.args[1:])); await update.message.reply_text("✅")
+        STOP_WORDS.append(" ".join(context.args[1:]))
+        await update.message.reply_text("✅")
     elif action == "remove" and len(context.args) > 1:
         w = " ".join(context.args[1:])
-        if w in STOP_WORDS: STOP_WORDS.remove(w)
+        if w in STOP_WORDS:
+            STOP_WORDS.remove(w)
         await update.message.reply_text("🗑")
 
 
@@ -1803,15 +2087,21 @@ async def stopwords_cmd(update, context):
 #  SECURITY MIDDLEWARE
 # ============================================================
 async def middleware(update, context):
-    if not update.effective_user or not update.message: return
+    if not update.effective_user or not update.message:
+        return
     uid = update.effective_user.id
-    if LOCKDOWN and uid != OWNER_ID: raise ApplicationHandlerStop
-    if SILENT_MODE and uid != OWNER_ID: raise ApplicationHandlerStop
+    if LOCKDOWN and uid != OWNER_ID:
+        raise ApplicationHandlerStop
+    if SILENT_MODE and uid != OWNER_ID:
+        raise ApplicationHandlerStop
     if str(uid) in state["MUTED"]:
         if datetime.now() > datetime.fromisoformat(state["MUTED"][str(uid)]):
-            state["MUTED"].pop(str(uid), None); save_state()
-        else: raise ApplicationHandlerStop
-    if uid in state["BANNED"]: raise ApplicationHandlerStop
+            state["MUTED"].pop(str(uid), None)
+            save_state()
+        else:
+            raise ApplicationHandlerStop
+    if uid in state["BANNED"]:
+        raise ApplicationHandlerStop
 
     now = time.time()
     bucket = [x for x in FLOOD_WINDOW.get(uid, []) if now - x < 60]
@@ -1829,15 +2119,18 @@ async def middleware(update, context):
         logs = []
         if os.path.exists(INTRUDER_FILE):
             try:
-                with open(INTRUDER_FILE) as f: logs = json.load(f)
-            except: pass
+                with open(INTRUDER_FILE) as f:
+                    logs = json.load(f)
+            except Exception:
+                pass
         logs.append(entry)
         _write_json(INTRUDER_FILE, logs)
         try:
             await context.bot.send_message(OWNER_ID,
                 f"🚨 <b>ДОСТУП</b>\n<code>{uid}</code> @{entry['username']}",
                 parse_mode=ParseMode.HTML)
-        except: pass
+        except Exception:
+            pass
         raise ApplicationHandlerStop
 
 
@@ -1853,7 +2146,8 @@ def run_flask():
     a = Flask(__name__)
     @a.route("/")
     @a.route("/health")
-    def h(): return "J.A.R.V.I.S. alive", 200
+    def h():
+        return "J.A.R.V.I.S. alive", 200
     a.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)), debug=False, use_reloader=False)
 
 
@@ -1886,7 +2180,6 @@ def main():
     app.add_handler(MessageHandler(filters.ANIMATION, animation_handler))
     app.add_handler(MessageHandler(filters.Document.ALL, document_handler))
 
-    # AI Pro
     for cmd, fn in [
         ("review", review_cmd), ("regex", regex_cmd), ("sql", sql_cmd),
         ("explain", explain_cmd), ("refactor", refactor_cmd), ("uml", uml_cmd),
@@ -1895,7 +2188,6 @@ def main():
     ]:
         app.add_handler(CommandHandler(cmd, fn))
 
-    # Text tools
     for cmd, fn in [
         ("improve", improve_cmd), ("fix", fix_cmd), ("shorten", shorten_cmd),
         ("expand", expand_cmd), ("keywords", keywords_cmd), ("theses", theses_cmd),
@@ -1903,21 +2195,18 @@ def main():
     ]:
         app.add_handler(CommandHandler(cmd, fn))
 
-    # Image tools
     for cmd, fn in [
         ("upscale", upscale_cmd), ("compress", compress_cmd), ("sticker", sticker_cmd),
         ("ocr", ocr_cmd), ("colors", colors_cmd), ("exif", exif_cmd),
     ]:
         app.add_handler(CommandHandler(cmd, fn))
 
-    # Personal
     for cmd, fn in [
         ("diary", diary_cmd), ("secret", secret_cmd), ("task", task_cmd),
         ("habit", habit_cmd), ("money", money_cmd),
     ]:
         app.add_handler(CommandHandler(cmd, fn))
 
-    # Dev
     for cmd, fn in [
         ("diff", diff_cmd), ("commit", commit_cmd), ("dockerfile", dockerfile_cmd),
         ("gitignore", gitignore_cmd), ("json", json_cmd), ("b64", b64_cmd),
@@ -1925,7 +2214,6 @@ def main():
     ]:
         app.add_handler(CommandHandler(cmd, fn))
 
-    # Admin
     for cmd, fn in [
         ("admin", admin_panel), ("add", add_whitelist), ("remove", remove_whitelist),
         ("whitelist", whitelist_list), ("ban", ban_user), ("unban", unban_user),
