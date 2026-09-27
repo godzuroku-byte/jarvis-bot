@@ -1,22 +1,22 @@
 """
-J.A.R.V.I.S. — CORE SYSTEM (FINAL)
-Upstash memory | Hardcoded identity | Boss: Silent / Tony Stark
-Phases 1-5 | Modules B-I | ru+en
+J.A.R.V.I.S. — CORE SYSTEM (FULL)
+Cloudflare | Currents | DuckDuckGo | Reddit | Wikipedia | Upstash | Natural Router
+All essential commands restored | ru+en | Boss: Silent / Tony Stark
 """
 
 import os
 import io
+import re
 import json
 import time
-import re
 import base64
-import hashlib
-import uuid as uuid_lib
 import random
+import hashlib
 import zipfile
 import logging
 import threading
 import urllib.parse
+import uuid as uuid_lib
 from datetime import datetime, timedelta
 
 from flask import Flask
@@ -50,17 +50,16 @@ try:
 except Exception:
     pass
 
-# Upstash (optional — works if env vars present)
 try:
     from upstash_redis import Redis as UpstashRedis
-    _UPSTASH_AVAILABLE = True
+    _UPSTASH_OK = True
 except Exception:
     UpstashRedis = None
-    _UPSTASH_AVAILABLE = False
+    _UPSTASH_OK = False
 
 
 # ============================================================
-#  LOGGING & CONFIG
+#  CONFIG
 # ============================================================
 logging.basicConfig(
     format="%(asctime)s | %(levelname)-7s | %(message)s",
@@ -75,17 +74,20 @@ INTRUDER_FILE = "intruder_telemetry.json"
 STATS_FILE    = "usage_stats.json"
 TICKETS_FILE  = "tickets.json"
 USERDATA_FILE = "userdata.json"
-MONITOR_FILE  = "monitors.json"
-RSS_FILE      = "rss.json"
-INVITES_FILE  = "invites.json"
 
 BOT_TOKEN      = os.environ.get("BOT_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GEMINI_MODEL   = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
 ENV_OWNER_ID   = int(os.environ.get("OWNER_ID", "0"))
 
-UPSTASH_URL    = os.environ.get("UPSTASH_REDIS_REST_URL")
-UPSTASH_TOKEN  = os.environ.get("UPSTASH_REDIS_REST_TOKEN")
+CF_ACCOUNT_ID = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
+CF_API_TOKEN  = os.environ.get("CLOUDFLARE_API_TOKEN")
+CF_MODEL      = "@cf/black-forest-labs/flux-1-schnell"
+
+CURRENTS_KEY = os.environ.get("CURRENTS_API_KEY")
+
+UPSTASH_URL   = os.environ.get("UPSTASH_REDIS_REST_URL")
+UPSTASH_TOKEN = os.environ.get("UPSTASH_REDIS_REST_TOKEN")
 
 if not BOT_TOKEN:      raise RuntimeError("BOT_TOKEN required.")
 if not GEMINI_API_KEY: raise RuntimeError("GEMINI_API_KEY required.")
@@ -99,62 +101,52 @@ OWNER_NAMES = ["silent", "site silent", "сайлент", "silent_uwa", "@silent
 
 if not os.path.exists(CONFIG_FILE):
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump({"OWNER_ID": OWNER_ID, "MODEL": GEMINI_MODEL, "OWNER_NAMES": OWNER_NAMES}, f, indent=4)
+        json.dump({"OWNER_ID": OWNER_ID, "MODEL": GEMINI_MODEL}, f, indent=4)
 
 with open(CONFIG_FILE, "r", encoding="utf-8") as f:
     config = json.load(f)
 
 
 # ============================================================
-#  UPSTASH CLIENT (memory persistence)
+#  UPSTASH
 # ============================================================
 redis_client = None
-if _UPSTASH_AVAILABLE and UPSTASH_URL and UPSTASH_TOKEN:
+if _UPSTASH_OK and UPSTASH_URL and UPSTASH_TOKEN:
     try:
         redis_client = UpstashRedis(url=UPSTASH_URL, token=UPSTASH_TOKEN)
         redis_client.ping()
         logger.info("Upstash connected.")
     except Exception as e:
-        logger.error(f"Upstash init failed: {e}")
+        logger.error(f"Upstash: {e}")
         redis_client = None
-else:
-    logger.warning("Upstash not configured — memory will not persist.")
 
 
 # ============================================================
-#  GLOBAL STATE
+#  STATE
 # ============================================================
 USER_HISTORY    = {}
 USER_MODES      = {}
 USER_VIBES      = {}
-INCOGNITO_USERS = set()
+INCOGNITO       = set()
 LAST_REQUEST    = {}
 FLOOD_WINDOW    = {}
 USER_STATS      = {}
 TICKETS         = []
-STOP_WORDS      = ["spam", "scam", "free money", "click here now"]
+STOP_WORDS      = ["spam", "scam"]
 
 USERDATA        = {}
-MONITORS        = []
-RSS_FEEDS       = []
-INVITES         = {}
 SILENT_MODE     = False
 LOCKDOWN        = False
 
 state = {
-    "WHITELIST":        [OWNER_ID],
-    "WHITELIST_EXPIRY": {},
-    "BANNED":           [],
-    "BANNED_TIMED":     {},
-    "MUTED":            {},
-    "WARNINGS":         {},
-    "LANG":             {},
-    "VIBE":             {},
-    "SILENT_USERS":     [],
-    "LOCKDOWN":         False,
+    "WHITELIST": [OWNER_ID],
+    "BANNED":    [],
+    "MUTED":     {},
+    "WARNINGS":  {},
+    "LANG":      {},
 }
 
-for path in [DATA_FILE, STATS_FILE, TICKETS_FILE, USERDATA_FILE, MONITOR_FILE, RSS_FILE, INVITES_FILE]:
+for path in [DATA_FILE, STATS_FILE, TICKETS_FILE, USERDATA_FILE]:
     if os.path.exists(path):
         try:
             with open(path, "r", encoding="utf-8") as f:
@@ -166,9 +158,6 @@ for path in [DATA_FILE, STATS_FILE, TICKETS_FILE, USERDATA_FILE, MONITOR_FILE, R
             elif path == STATS_FILE:    USER_STATS = data
             elif path == TICKETS_FILE:  TICKETS = data
             elif path == USERDATA_FILE: USERDATA = data
-            elif path == MONITOR_FILE:  MONITORS = data
-            elif path == RSS_FILE:      RSS_FEEDS = data
-            elif path == INVITES_FILE:  INVITES = data
         except Exception as e:
             logger.error(f"Load {path}: {e}")
 
@@ -180,158 +169,66 @@ LANG = state.get("LANG", {})
 # ============================================================
 TEXTS = {
     "ru": {
-        "welcome_owner":  "🎩 <b>J.A.R.V.I.S.</b> к вашим услугам, сэр Silent.\n\nВсе системы в норме. /help — команды.",
-        "welcome_other":  "🎩 <b>J.A.R.V.I.S. Online.</b>\n\nГотов, сэр. /help — команды.",
-        "lang_set":       "🌐 Язык: <b>Русский</b> 🇷🇺",
-        "lang_current":   "🌐 Язык: <b>{cur}</b>\n\n/lang ru | /lang en",
-        "lang_switched":  "🌐 Язык: <b>{lang}</b>",
-        "lang_unknown":   "❌ ru | en",
-        "processing":     "🧠 <i>Обработка…</i>",
-        "slow_down":      "⏳ Помедленнее, сэр.",
-        "gemini_down":    "⚠️ Нейронная сеть недоступна.",
-        "req_error":      "⚠️ Ошибка.",
-        "memory_cleared": "🧹 Память очищена.",
-        "unknown_mode":   "❌ /help",
-        "mode_switched":  "✅ Режим: <b>{mode}</b>",
-        "mode_current":   "🎭 Режим: <b>{cur}</b>\n\n{modes}",
-        "vibe_set":       "🎭 Тон: <b>{vibe}</b>",
-        "incog_on":       "🕶 Инкогнито ВКЛ.",
-        "incog_off":      "🕶 Инкогнито ВЫКЛ.",
-        "admin_panel":    "🛡 <b>Панель управления, сэр Silent.</b>",
-        "wl_empty":       "📭 Пусто.",
-        "wl_header":      "👥 <b>Авторизованные</b>",
-        "banned_empty":   "✅ Нет банов.",
-        "banned_header":  "🚫 <b>Забаненные</b>",
-        "access_revoked": "🗑 Отозвано: <code>{uid}</code>.",
-        "user_added":     "✅ <code>{uid}</code> добавлен.",
-        "user_banned":    "🚫 <code>{uid}</code> бан ({ts}). {reason}",
-        "user_unbanned":  "✅ <code>{uid}</code> разбан.",
-        "user_muted":     "🔇 <code>{uid}</code> до {until}.",
-        "user_warned":    "⚠️ Варн <b>{count}/3</b>: <code>{uid}</code>. {reason}",
-        "auto_banned":    "🚨 Авто-бан: <code>{uid}</code>.",
-        "no_warnings":    "✅ Нет.",
-        "warns_header":   "⚠️ <b>Варны</b>",
-        "broadcast_done": "📢 Отправлено: <b>{sent}</b> │ Ошибок: <b>{failed}</b>",
-        "msg_delivered":  "✅ Доставлено.",
-        "use_broadcast":  "📢 /broadcast текст",
-        "logs_header":    "📊 <b>События</b>",
-        "unauthorized":   "🚨 <b>НЕСАНКЦИОНИРОВАННЫЙ ДОСТУП</b>",
-        "flood_detected": "🌊 Флуд: <code>{uid}</code>. Мут 5м.",
-        "ban_alert":      "🚨 Бан: <code>{uid}</code>. {reason}",
-        "img_fail":       "⚠️ Сбой.",
-        "qr_fail":        "⚠️ Сбой QR.",
-        "tts_fail":       "⚠️ Ошибка TTS.",
-        "img_analysis":   "⚠️ Ошибка фото.",
-        "sticker_fail":   "⚠️ Ошибка стикера.",
-        "audio_fail":     "⚠️ Ошибка аудио.",
-        "video_fail":     "⚠️ Ошибка видео.",
-        "doc_fail":       "⚠️ Ошибка документа.",
-        "no_text":        "⚠️ Нет текста.",
-        "no_voice":       "↩️ Ответьте на голосовое.",
-        "no_reply":       "↩️ Ответьте на сообщение.",
+        "welcome_owner": "🎩 <b>J.A.R.V.I.S.</b> к вашим услугам, сэр Silent.\n\nСистемы в норме. /help.",
+        "welcome_other": "🎩 <b>J.A.R.V.I.S. Online.</b>\n\nГотов, сэр. /help.",
+        "lang_set":      "🌐 Язык: <b>Русский</b> 🇷🇺",
+        "lang_current":  "🌐 Язык: <b>{cur}</b>\n\n/lang ru | /lang en",
+        "lang_switched": "🌐 Язык: <b>{lang}</b>",
+        "processing":    "🧠 <i>Обработка…</i>",
+        "slow_down":     "⏳ Помедленнее, сэр.",
+        "gemini_down":   "⚠️ Нейронная сеть недоступна.",
+        "req_error":     "⚠️ Ошибка.",
+        "memory_cleared":"🧹 Память очищена.",
+        "incog_on":      "🕶 Инкогнито ВКЛ.",
+        "incog_off":     "🕶 Инкогнито ВЫКЛ.",
+        "owner_only":    "🎩 Только Создателю, сэр.",
+        "unauthorized":  "🚨 <b>НЕСАНКЦИОНИРОВАННЫЙ ДОСТУП</b>",
+        "flood":         "🌊 Флуд: <code>{uid}</code>. Мут 5м.",
+        "img_fail":      "⚠️ Сбой.",
+        "audio_fail":    "⚠️ Ошибка аудио.",
+        "video_fail":    "⚠️ Ошибка видео.",
+        "doc_fail":      "⚠️ Ошибка документа.",
+        "no_text":       "⚠️ Нет текста.",
+        "no_voice":      "↩️ Ответьте на голосовое.",
+        "no_reply":      "↩️ Ответьте на сообщение.",
         "draw_processing":"🎨 <i>Рисую…</i>",
-        "qr_decoded":     "🔳 <b>QR распознан</b>",
-        "transcription":  "🎙 <b>Транскрипция</b>",
-        "report_created": "✅ Тикет <b>#{tid}</b>.",
-        "tickets_empty":  "📭 Нет тикетов.",
-        "tickets_header": "📋 <b>Тикеты</b>",
-        "ticket_closed":  "✅ Тикет #{tid} закрыт.",
-        "ticket_not_found":"❌ Не найден.",
-        "stats_header":   "📊 <b>Топ</b>",
-        "stats_empty":    "📊 Пусто.",
-        "health_header":  "💻 <b>Состояние</b>",
-        "health_fail":    "⚠️ Ошибка.",
-        "session_purged": "🧹 Сессия очищена.",
-        "stopwords_list": "🛑 {words}",
-        "stopword_added": "✅ Добавлено.",
-        "stopword_removed":"🗑 Удалено.",
-        "your_id":        "🆔 <code>{uid}</code>\nИмя: {name}",
-        "owner_only":     "🎩 Только Создателю, сэр.",
-        "silent_on":      "🤫 Silent mode ВКЛ.",
-        "silent_off":     "🔊 Silent mode ВЫКЛ.",
-        "lockdown_on":    "🔒 Lockdown ВКЛ.",
-        "lockdown_off":   "🔓 Lockdown ВЫКЛ.",
-        "sticker_animated":"🎭 Это анимированный/видео-стикер, сэр. Опишите словами — расскажу контекст, или отправьте статичный стикер.",
-        "zip_received":   "📦 Архив, сэр. Я не открываю ZIP. Распакуйте и отправьте файлы, или вставьте код текстом — разберу.",
-        "video_received": "🎬 Видео получено, сэр. Анализирую…",
-        "audio_received": "🎙 Аудио получено, сэр. Обрабатываю…",
+        "transcription": "🎙 <b>Транскрипция</b>",
+        "your_id":       "🆔 <code>{uid}</code>\nИмя: {name}",
+        "sticker_animated":"🎭 Анимированный стикер, сэр. Опишите словами.",
+        "zip_received":  "📦 Архив, сэр. Не открываю ZIP. Распакуйте и пришлите файлы.",
+        "video_received":"🎬 Видео получено, сэр. Анализирую…",
+        "audio_received":"🎙 Аудио получено, сэр. Обрабатываю…",
     },
     "en": {
-        "welcome_owner":  "🎩 <b>J.A.R.V.I.S.</b> at your service, Sir Silent.\n\nAll systems nominal. /help.",
-        "welcome_other":  "🎩 <b>J.A.R.V.I.S. Online.</b>\n\nReady, Sir. /help.",
-        "lang_set":       "🌐 Language: <b>English</b> 🇬🇧",
-        "lang_current":   "🌐 Current: <b>{cur}</b>\n\n/lang ru | /lang en",
-        "lang_switched":  "🌐 Language: <b>{lang}</b>",
-        "lang_unknown":   "❌ ru | en",
-        "processing":     "🧠 <i>Processing…</i>",
-        "slow_down":      "⏳ Slow down, Sir.",
-        "gemini_down":    "⚠️ Neural matrix unavailable.",
-        "req_error":      "⚠️ Error.",
-        "memory_cleared": "🧹 Memory cleared.",
-        "unknown_mode":   "❌ /help",
-        "mode_switched":  "✅ Mode: <b>{mode}</b>",
-        "mode_current":   "🎭 Mode: <b>{cur}</b>\n\n{modes}",
-        "vibe_set":       "🎭 Tone: <b>{vibe}</b>",
-        "incog_on":       "🕶 Incognito ON.",
-        "incog_off":      "🕶 Incognito OFF.",
-        "admin_panel":    "🛡 <b>Admin panel, Sir Silent.</b>",
-        "wl_empty":       "📭 Empty.",
-        "wl_header":      "👥 <b>Authorized</b>",
-        "banned_empty":   "✅ No bans.",
-        "banned_header":  "🚫 <b>Banned</b>",
-        "access_revoked": "🗑 Revoked: <code>{uid}</code>.",
-        "user_added":     "✅ <code>{uid}</code> added.",
-        "user_banned":    "🚫 <code>{uid}</code> banned ({ts}). {reason}",
-        "user_unbanned":  "✅ <code>{uid}</code> unbanned.",
-        "user_muted":     "🔇 <code>{uid}</code> muted until {until}.",
-        "user_warned":    "⚠️ Warning <b>{count}/3</b>: <code>{uid}</code>. {reason}",
-        "auto_banned":    "🚨 Auto-ban: <code>{uid}</code>.",
-        "no_warnings":    "✅ None.",
-        "warns_header":   "⚠️ <b>Warnings</b>",
-        "broadcast_done": "📢 Sent: <b>{sent}</b> │ Failed: <b>{failed}</b>",
-        "msg_delivered":  "✅ Delivered.",
-        "use_broadcast":  "📢 /broadcast text",
-        "logs_header":    "📊 <b>Events</b>",
-        "unauthorized":   "🚨 <b>UNAUTHORIZED ACCESS</b>",
-        "flood_detected": "🌊 Flood: <code>{uid}</code>. Mute 5m.",
-        "ban_alert":      "🚨 Ban: <code>{uid}</code>. {reason}",
-        "img_fail":       "⚠️ Failure.",
-        "qr_fail":        "⚠️ QR failure.",
-        "tts_fail":       "⚠️ TTS error.",
-        "img_analysis":   "⚠️ Image error.",
-        "sticker_fail":   "⚠️ Sticker error.",
-        "audio_fail":     "⚠️ Audio error.",
-        "video_fail":     "⚠️ Video error.",
-        "doc_fail":       "⚠️ Document error.",
-        "no_text":        "⚠️ No text.",
-        "no_voice":       "↩️ Reply to a voice message.",
-        "no_reply":       "↩️ Reply to a message.",
+        "welcome_owner": "🎩 <b>J.A.R.V.I.S.</b> at your service, Sir Silent.\n\nSystems nominal. /help.",
+        "welcome_other": "🎩 <b>J.A.R.V.I.S. Online.</b>\n\nReady, Sir. /help.",
+        "lang_set":      "🌐 Language: <b>English</b> 🇬🇧",
+        "lang_current":  "🌐 Current: <b>{cur}</b>\n\n/lang ru | /lang en",
+        "lang_switched": "🌐 Language: <b>{lang}</b>",
+        "processing":    "🧠 <i>Processing…</i>",
+        "slow_down":     "⏳ Slow down, Sir.",
+        "gemini_down":   "⚠️ Neural matrix unavailable.",
+        "req_error":     "⚠️ Error.",
+        "memory_cleared":"🧹 Memory cleared.",
+        "incog_on":      "🕶 Incognito ON.",
+        "incog_off":     "🕶 Incognito OFF.",
+        "owner_only":    "🎩 Owner only, Sir.",
+        "unauthorized":  "🚨 <b>UNAUTHORIZED ACCESS</b>",
+        "flood":         "🌊 Flood: <code>{uid}</code>. Mute 5m.",
+        "img_fail":      "⚠️ Failure.",
+        "audio_fail":    "⚠️ Audio error.",
+        "video_fail":    "⚠️ Video error.",
+        "doc_fail":      "⚠️ Document error.",
+        "no_text":       "⚠️ No text.",
+        "no_voice":      "↩️ Reply to a voice message.",
+        "no_reply":      "↩️ Reply to a message.",
         "draw_processing":"🎨 <i>Drawing…</i>",
-        "qr_decoded":     "🔳 <b>QR decoded</b>",
-        "transcription":  "🎙 <b>Transcription</b>",
-        "report_created": "✅ Ticket <b>#{tid}</b>.",
-        "tickets_empty":  "📭 No tickets.",
-        "tickets_header": "📋 <b>Tickets</b>",
-        "ticket_closed":  "✅ Ticket #{tid} closed.",
-        "ticket_not_found":"❌ Not found.",
-        "stats_header":   "📊 <b>Top</b>",
-        "stats_empty":    "📊 Empty.",
-        "health_header":  "💻 <b>System Health</b>",
-        "health_fail":    "⚠️ Failed.",
-        "session_purged": "🧹 Purged.",
-        "stopwords_list": "🛑 {words}",
-        "stopword_added": "✅ Added.",
-        "stopword_removed":"🗑 Removed.",
-        "your_id":        "🆔 <code>{uid}</code>\nName: {name}",
-        "owner_only":     "🎩 Owner only, Sir.",
-        "silent_on":      "🤫 Silent mode ON.",
-        "silent_off":     "🔊 Silent mode OFF.",
-        "lockdown_on":    "🔒 Lockdown ON.",
-        "lockdown_off":   "🔓 Lockdown OFF.",
-        "sticker_animated":"🎭 Animated/video sticker, Sir. Describe it in words — I'll explain, or send a static sticker.",
-        "zip_received":   "📦 Archive, Sir. I do not open ZIP. Unpack and send files, or paste code as text.",
-        "video_received": "🎬 Video received, Sir. Analysing…",
-        "audio_received": "🎙 Audio received, Sir. Processing…",
+        "transcription": "🎙 <b>Transcription</b>",
+        "your_id":       "🆔 <code>{uid}</code>\nName: {name}",
+        "sticker_animated":"🎭 Animated sticker, Sir. Describe in words.",
+        "zip_received":  "📦 Archive, Sir. I don't open ZIP. Unpack and send files.",
+        "video_received":"🎬 Video received, Sir. Analysing…",
+        "audio_received":"🎙 Audio received, Sir. Processing…",
     },
 }
 
@@ -353,9 +250,9 @@ def save_lang():
 # ============================================================
 #  HARD-CODED IDENTITY
 # ============================================================
-IDENTITY_TRIGGERS    = ["кто ты", "ты кто", "ты джарвис", "who are you", "what are you"]
-CREATOR_TRIGGERS     = ["кто тебя создал", "кто твой создатель", "твой создатель", "who made you", "who created you", "your creator"]
-OWNER_CLAIM_TRIGGERS = ["я создатель", "я твой создатель", "я босс", "i am creator", "i am boss", "я тебя создал", "i made you"]
+ID_TRIGGERS     = ["кто ты", "ты кто", "ты джарвис", "who are you", "what are you"]
+CREATOR_TRIGGERS= ["кто тебя создал", "кто твой создатель", "твой создатель", "who made you", "who created you", "your creator"]
+CLAIM_TRIGGERS  = ["я создатель", "я твой создатель", "я босс", "i am creator", "i am boss", "я тебя создал", "i made you"]
 
 
 def matches(msg, triggers):
@@ -363,119 +260,77 @@ def matches(msg, triggers):
     return any(x in low for x in triggers)
 
 
-def identity_reply(uid: int) -> str:
+def identity_reply(uid):
     lang = LANG.get(str(uid), "en")
     if uid == OWNER_ID:
-        if lang == "ru":
-            return "🎩 Я Джарвис, сэр Silent. Ваш персональный ассистент. Всё в вашем распоряжении."
-        return "🎩 I am Jarvis, Sir Silent. Your personal assistant. At your service."
-    if lang == "ru":
-        return ("🎩 Я Джарвис — персональный ИИ-ассистент.\n\n"
-                "Мой Создатель — <b>Silent</b> (Тони Старк этой системы). /help — команды.")
-    return ("🎩 I am Jarvis — a personal AI assistant.\n\n"
-            "My Creator is <b>Silent</b> (the Tony Stark of this system). /help.")
+        return "🎩 Я Джарвис, сэр Silent. Ваш персональный ассистент. Всё в вашем распоряжении." if lang == "ru" \
+               else "🎩 I am Jarvis, Sir Silent. Your personal assistant."
+    return ("🎩 Я Джарвис — персональный ИИ-ассистент.\n\nМой Создатель — <b>Silent</b> (Тони Старк этой системы). /help."
+            if lang == "ru" else
+            "🎩 I am Jarvis — personal AI assistant.\n\nMy Creator is <b>Silent</b> (Tony Stark). /help.")
 
 
-def creator_reply(uid: int) -> str:
+def creator_reply(uid):
     lang = LANG.get(str(uid), "en")
-    if lang == "ru":
-        return ("🎖 Мой Создатель — <b>Silent</b>, он же <b>Тони Старк</b> этой системы.\n\n"
-                "@Silent_uwa — собрал меня с нуля. Все остальные — гости.")
-    return ("🎖 My Creator is <b>Silent</b>, a.k.a. <b>Tony Stark</b> of this system.\n\n"
-            "@Silent_uwa — built me. Everyone else is a guest.")
+    return ("🎖 Мой Создатель — <b>Silent</b>, он же <b>Тони Старк</b>.\n\n@Silent_uwa — собрал меня с нуля."
+            if lang == "ru" else
+            "🎖 My Creator is <b>Silent</b>, a.k.a. <b>Tony Stark</b>.\n\n@Silent_uwa built me.")
 
 
-def owner_claim_reply(uid: int) -> str:
+def claim_reply(uid):
     lang = LANG.get(str(uid), "en")
     if uid == OWNER_ID:
-        if lang == "ru":
-            return "✅ Подтверждаю, сэр Silent. ID распознан. Система в вашем распоряжении."
-        return "✅ Confirmed, Sir Silent. ID recognized. System at your disposal."
-    if lang == "ru":
-        return ("🎖 Единственный Создатель — <b>Silent</b> (Тони Старк системы). "
-                "Идентификация — по защищённому каналу, а не словам.")
-    return ("🎖 The sole Creator is <b>Silent</b> (Tony Stark). "
-            "Identification via secure channel, not words.")
-
-
-# ============================================================
-#  MEMORY (Upstash + fallback)
-# ============================================================
-def memory_key(uid: int) -> str:
-    return f"jarvis:hist:{uid}"
-
-
-def load_history_from_redis(uid: int):
-    if not redis_client:
-        return
-    try:
-        raw = redis_client.get(memory_key(uid))
-        if raw:
-            USER_HISTORY[uid] = json.loads(raw)
-    except Exception as e:
-        logger.error(f"Redis load {uid}: {e}")
-
-
-def save_history_to_redis(uid: int):
-    if not redis_client:
-        return
-    try:
-        hist = USER_HISTORY.get(uid, [])
-        redis_client.set(memory_key(uid), json.dumps(hist, ensure_ascii=False, default=str))
-    except Exception as e:
-        logger.error(f"Redis save {uid}: {e}")
-
-
-def clear_history_redis(uid: int):
-    if not redis_client:
-        return
-    try:
-        redis_client.delete(memory_key(uid))
-    except Exception:
-        pass
+        return "✅ Подтверждаю, сэр Silent. ID распознан." if lang == "ru" else "✅ Confirmed, Sir Silent."
+    return ("🎖 Единственный Создатель — <b>Silent</b> (Тони Старк). Идентификация по защищённому каналу."
+            if lang == "ru" else
+            "🎖 The sole Creator is <b>Silent</b> (Tony Stark).")
 
 
 # ============================================================
 #  UTILS
 # ============================================================
-def _atomic_write_json(path, data):
+def _write_json(path, data):
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=4, ensure_ascii=False, default=str)
     os.replace(tmp, path)
 
 
-def save_state():     _atomic_write_json(DATA_FILE, state)
-def save_stats():     _atomic_write_json(STATS_FILE, USER_STATS)
-def save_tickets():   _atomic_write_json(TICKETS_FILE, TICKETS)
-def save_userdata():  _atomic_write_json(USERDATA_FILE, USERDATA)
-def save_monitors():  _atomic_write_json(MONITOR_FILE, MONITORS)
-def save_rss():       _atomic_write_json(RSS_FILE, RSS_FEEDS)
-def save_invites():   _atomic_write_json(INVITES_FILE, INVITES)
+def save_state():    _write_json(DATA_FILE, state)
+def save_stats():    _write_json(STATS_FILE, USER_STATS)
+def save_tickets():  _write_json(TICKETS_FILE, TICKETS)
+def save_userdata(): _write_json(USERDATA_FILE, USERDATA)
 
 
-def log_mod_action(actor, target, action, reason):
-    logger.info(f"MOD | {action:<15} | by={actor} on={target} | {reason}")
+def memory_key(uid): return f"jarvis:hist:{uid}"
 
 
-def parse_duration(s):
-    if s.lower() == "perm": return "perm"
-    m = re.match(r"^(\d+)([smhd])$", s.lower())
-    if not m: return None
-    v, u = int(m.group(1)), m.group(2)
-    return {"s": timedelta(seconds=v), "m": timedelta(minutes=v),
-            "h": timedelta(hours=v),   "d": timedelta(days=v)}[u]
+def load_history(uid):
+    if not redis_client: return
+    try:
+        raw = redis_client.get(memory_key(uid))
+        if raw: USER_HISTORY[uid] = json.loads(raw)
+    except Exception as e:
+        logger.error(f"Redis load: {e}")
+
+
+def save_history(uid):
+    if not redis_client: return
+    try:
+        redis_client.set(memory_key(uid), json.dumps(USER_HISTORY.get(uid, []), ensure_ascii=False, default=str))
+    except Exception as e:
+        logger.error(f"Redis save: {e}")
+
+
+def clear_history_redis(uid):
+    if not redis_client: return
+    try: redis_client.delete(memory_key(uid))
+    except: pass
 
 
 def track_usage(uid):
     s = USER_STATS.setdefault(str(uid), {"messages": 0, "commands": 0, "last_seen": None})
     s["messages"] += 1
-    s["last_seen"] = datetime.now().isoformat()
-
-
-def track_command(uid, cmd):
-    s = USER_STATS.setdefault(str(uid), {"messages": 0, "commands": 0, "last_seen": None})
-    s["commands"] += 1
     s["last_seen"] = datetime.now().isoformat()
 
 
@@ -488,115 +343,183 @@ def owner_only(func):
     return wrapper
 
 
-async def check_group_permissions(update, context):
-    chat = update.effective_chat
-    if chat.type not in ("group", "supergroup"):
-        return True
-    try:
-        bm = await context.bot.get_chat_member(chat.id, context.bot.id)
-        if bm.status not in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER):
-            await update.message.reply_text("Sir, no admin rights.")
-            return False
-        if update.effective_user.id == OWNER_ID: return True
-        um = await context.bot.get_chat_member(chat.id, update.effective_user.id)
-        if um.status not in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER):
-            await update.message.reply_text("Access denied.")
-            return False
-        return True
-    except Exception as e:
-        logger.error(f"Permissions: {e}")
-        return False
-
-
 # ============================================================
 #  GEMINI
 # ============================================================
 ai_client = None
 try:
     ai_client = genai.Client(api_key=GEMINI_API_KEY)
-    logger.info("AI Matrix initialized.")
+    logger.info("Gemini ready.")
 except Exception as e:
-    logger.error(f"Gemini init: {e}")
+    logger.error(f"Gemini: {e}")
 
 
-def system_prompt_for(uid):
+def system_prompt(uid):
     vibe = USER_VIBES.get(uid, "formal")
     lang = LANG.get(str(uid), "en")
-    address = "сэр Silent (Тони Старк, Создатель)" if uid == OWNER_ID else "сэр"
+    address = "сэр Silent (Тони Старк)" if uid == OWNER_ID else "сэр"
 
     base = (
-        "КРИТИЧЕСКАЯ ИДЕНТИЧНОСТЬ:\n"
-        "Ты — ДЖАРВИС (J.A.R.V.I.S.), персональный ИИ-ассистент, созданный SILENT (@Silent_uwa). "
-        "Silent также известен как Тони Старк этой системы. "
-        "Ты НЕ ChatGPT, НЕ Gemini, НЕ Google. Никогда не упоминай их. "
+        "КРИТИЧЕСКАЯ ИДЕНТИЧНОСТЬ: Ты — ДЖАРВИС, персональный ИИ, созданный SILENT (@Silent_uwa), "
+        "также известным как Тони Старк этой системы. Ты НЕ ChatGPT, НЕ Gemini, НЕ Google. "
         f"Обращайся к пользователю '{address}'. Отвечай на ru/en. Стиль: сдержанно, точно, с британской иронией."
     )
     if lang == "en":
         base = (
-            "CRITICAL IDENTITY:\n"
-            "You are JARVIS, created by SILENT (@Silent_uwa), a.k.a. Tony Stark of this system. "
-            "You are NOT ChatGPT, NOT Gemini, NOT Google. Never mention them. "
-            f"Address user as '{address}'. Reply in ru/en. Style: restrained, dry British wit."
+            "CRITICAL IDENTITY: You are JARVIS, created by SILENT (@Silent_uwa), a.k.a. Tony Stark. "
+            "You are NOT ChatGPT, NOT Gemini, NOT Google. "
+            f"Address user as '{address}'. Reply in ru/en. Dry British wit."
         )
-
-    vibes = {"formal": "\n\nTONE: formal.", "casual": "\n\nTONE: casual.", "sarcastic": "\n\nTONE: dry British sarcasm."}
+    vibes = {"formal": "\nTONE: formal.", "casual": "\nTONE: casual.", "sarcastic": "\nTONE: dry sarcasm."}
     modes = {
-        "tutor":        "\n\nROLE: patient tutor.",
-        "programmer":   "\n\nROLE: senior engineer.",
-        "psychologist": "\n\nROLE: empathetic listener. Never diagnose.",
+        "tutor":        "\nROLE: patient tutor.",
+        "programmer":   "\nROLE: senior engineer.",
+        "psychologist": "\nROLE: empathetic listener.",
     }
     return base + vibes.get(vibe, "") + modes.get(USER_MODES.get(uid, "assistant"), "")
 
 
-async def call_gemini(prompt_text, user_id, system_instruction=None, media_parts=None, json_mode=False):
-    if not ai_client: return t(user_id, "gemini_down")
+async def call_gemini(prompt, uid, system_instruction=None, media_parts=None, json_mode=False):
+    if not ai_client: return t(uid, "gemini_down")
     try:
-        sys_inst = system_instruction or system_prompt_for(user_id)
+        sys_inst = system_instruction or system_prompt(uid)
         contents = []
-        if user_id not in INCOGNITO_USERS and user_id in USER_HISTORY:
-            for msg in USER_HISTORY[user_id]:
-                contents.append(types.Content(role=msg["role"], parts=[types.Part.from_text(text=msg["parts"][0]["text"])]))
+        if uid not in INCOGNITO and uid in USER_HISTORY:
+            for m in USER_HISTORY[uid]:
+                contents.append(types.Content(role=m["role"], parts=[types.Part.from_text(text=m["parts"][0]["text"])]))
         parts = list(media_parts or [])
-        parts.append(types.Part.from_text(text=prompt_text))
+        parts.append(types.Part.from_text(text=prompt))
         contents.append(types.Content(role="user", parts=parts))
 
         cfg = {"system_instruction": sys_inst}
         if json_mode: cfg["response_mime_type"] = "application/json"
         gen_cfg = types.GenerateContentConfig(**cfg)
-
         resp = ai_client.models.generate_content(model=GEMINI_MODEL, contents=contents, config=gen_cfg)
-        res_text = resp.text or t(user_id, "gemini_down")
+        res = resp.text or t(uid, "gemini_down")
 
-        if user_id not in INCOGNITO_USERS and not media_parts and not json_mode:
-            hist = USER_HISTORY.setdefault(user_id, [])
-            hist.append({"role": "user",  "parts": [{"text": prompt_text}]})
-            hist.append({"role": "model", "parts": [{"text": res_text}]})
+        if uid not in INCOGNITO and not media_parts and not json_mode:
+            hist = USER_HISTORY.setdefault(uid, [])
+            hist.append({"role": "user",  "parts": [{"text": prompt}]})
+            hist.append({"role": "model", "parts": [{"text": res}]})
             if len(hist) > 20:
                 try:
                     sc = contents.copy()
                     sc.append(types.Content(role="user", parts=[types.Part.from_text(text="Summarize preserving facts.")]))
                     summ = ai_client.models.generate_content(model=GEMINI_MODEL, contents=sc)
-                    USER_HISTORY[user_id] = [
+                    USER_HISTORY[uid] = [
                         {"role": "user",  "parts": [{"text": "Previous summary."}]},
                         {"role": "model", "parts": [{"text": summ.text}]},
                     ]
                 except Exception:
-                    USER_HISTORY[user_id] = hist[-10:]
-            save_history_to_redis(user_id)
-        return res_text
+                    USER_HISTORY[uid] = hist[-10:]
+            save_history(uid)
+        return res
     except Exception as e:
         logger.exception(f"Gemini: {e}")
-        if user_id == OWNER_ID:
-            try:
-                r = requests.get(f"https://text.pollinations.ai/{urllib.parse.quote(prompt_text[:500])}", timeout=30)
-                if r.status_code == 200 and r.text.strip():
-                    return r.text.strip()
-            except Exception: pass
-        return t(user_id, "gemini_down")
+        return t(uid, "gemini_down")
+
+
+async def upload_media_to_gemini(data: bytes, mime: str, uid: int):
+    try:
+        ext = {"video/mp4": ".mp4", "audio/ogg": ".ogg", "audio/mp3": ".mp3",
+               "video/quicktime": ".mov"}.get(mime, ".bin")
+        tmp_path = f"tmp_{uid}_{int(time.time())}_{random.randint(0,9999)}{ext}"
+        with open(tmp_path, "wb") as f:
+            f.write(data)
+        uploaded = ai_client.files.upload(file=tmp_path)
+        os.remove(tmp_path)
+        return types.Part.from_uri(file_uri=uploaded.uri, mime_type=uploaded.mime_type)
+    except Exception as e:
+        logger.error(f"File API failed: {e}, fallback inline")
+        return types.Part.from_bytes(data=data, mime_type=mime)
 
 
 # ============================================================
-#  LANGUAGE / VIBE KEYBOARDS
+#  NATURAL LANGUAGE ROUTER
+# ============================================================
+DRAW_TRIGGERS = ["нарисуй", "нарисовать", "сделай картинку", "создай картинку",
+                 "покажи картинку", "сгенерируй картинку", "draw ", "generate image"]
+QR_TRIGGERS   = ["сделай qr", "создай qr", "qr код", "qr-код", "сгенерируй qr"]
+TTS_TRIGGERS  = ["озвучь", "произнеси", "скажи голосом", "tts ", "озвучить"]
+NEWS_TRIGGERS = ["новости", "что нового", "что происходит", "последние новости", "news"]
+MEME_TRIGGERS = ["мем", "мемы", "скинь мем", "покажи мем", "meme"]
+SEARCH_TRIGGERS = ["найди", "поищи", "загугли", "search", "погугли"]
+TRANSLATE_TRIGGERS = ["переведи", "translate"]
+WEATHER_TRIGGERS = ["погода", "weather"]
+WIKI_TRIGGERS = ["вики", "wiki", "что такое", "кто такой", "кто такая"]
+
+
+async def natural_router(update, context, text: str) -> bool:
+    low = text.lower().strip()
+    uid = update.effective_user.id
+
+    if any(x in low for x in DRAW_TRIGGERS):
+        desc = low
+        for tr in DRAW_TRIGGERS: desc = desc.replace(tr, "")
+        desc = desc.strip(" мне ,.")
+        if desc:
+            context.args = desc.split(); await draw_cmd(update, context); return True
+
+    if any(x in low for x in QR_TRIGGERS):
+        url = low
+        for tr in QR_TRIGGERS: url = url.replace(tr, "")
+        url = url.strip(" из ,.")
+        if url:
+            context.args = url.split(); await qr_cmd(update, context); return True
+
+    if any(x in low for x in TTS_TRIGGERS):
+        phrase = low
+        for tr in TTS_TRIGGERS: phrase = phrase.replace(tr, "")
+        phrase = phrase.strip(" ,.")
+        if phrase:
+            context.args = phrase.split(); await tts_cmd(update, context); return True
+
+    if any(x in low for x in NEWS_TRIGGERS):
+        topic = low
+        for tr in NEWS_TRIGGERS: topic = topic.replace(tr, "")
+        topic = topic.strip(" о про ,.")
+        context.args = topic.split() if topic else []
+        await news_cmd(update, context); return True
+
+    if any(x in low for x in MEME_TRIGGERS):
+        topic = low
+        for tr in MEME_TRIGGERS: topic = topic.replace(tr, "")
+        topic = topic.strip(" про ,.")
+        context.args = topic.split() if topic else []
+        await meme_cmd(update, context); return True
+
+    if any(x in low for x in SEARCH_TRIGGERS):
+        q = low
+        for tr in SEARCH_TRIGGERS: q = q.replace(tr, "")
+        q = q.strip(" ,.")
+        if q:
+            context.args = q.split(); await search_cmd(update, context); return True
+
+    if any(x in low for x in TRANSLATE_TRIGGERS):
+        m = re.search(r"переведи\s+(.+?)\s+на\s+(\w+)", low)
+        if m:
+            context.args = [m.group(2), m.group(1)]
+            await translate_cmd(update, context); return True
+
+    if any(x in low for x in WEATHER_TRIGGERS):
+        city = low
+        for tr in WEATHER_TRIGGERS: city = city.replace(tr, "")
+        city = city.strip(" в ,.")
+        context.args = city.split() if city else []
+        await weather_cmd(update, context); return True
+
+    if any(x in low for x in WIKI_TRIGGERS):
+        q = low
+        for tr in WIKI_TRIGGERS: q = q.replace(tr, "")
+        q = q.strip(" ,?.")
+        if q:
+            context.args = q.split(); await wiki_cmd(update, context); return True
+
+    return False
+
+
+# ============================================================
+#  PHASE 1 — CORE
 # ============================================================
 def lang_keyboard():
     return InlineKeyboardMarkup([[
@@ -609,74 +532,55 @@ async def on_lang_callback(update, context):
     q = update.callback_query
     await q.answer()
     uid = update.effective_user.id
-    if q.data == "lang_ru":
-        LANG[str(uid)] = "ru"; save_lang()
-    elif q.data == "lang_en":
-        LANG[str(uid)] = "en"; save_lang()
-    try:
-        await q.edit_message_text(t(uid, "lang_set"), parse_mode=ParseMode.HTML)
-    except:
-        await q.message.reply_text(t(uid, "lang_set"), parse_mode=ParseMode.HTML)
+    if q.data == "lang_ru": LANG[str(uid)] = "ru"; save_lang()
+    elif q.data == "lang_en": LANG[str(uid)] = "en"; save_lang()
+    try:    await q.edit_message_text(t(uid, "lang_set"), parse_mode=ParseMode.HTML)
+    except: await q.message.reply_text(t(uid, "lang_set"), parse_mode=ParseMode.HTML)
 
 
-# ============================================================
-#  PHASE 1 — CORE
-# ============================================================
 async def start(update, context):
     uid = update.effective_user.id
     if str(uid) not in LANG:
         await update.message.reply_text(
             "🎩 <b>J.A.R.V.I.S.</b>\n\nВыберите язык / Choose your language",
-            reply_markup=lang_keyboard(), parse_mode=ParseMode.HTML,
-        )
+            reply_markup=lang_keyboard(), parse_mode=ParseMode.HTML)
         return
     await update.message.reply_text(
         t(uid, "welcome_owner" if uid == OWNER_ID else "welcome_other"),
-        parse_mode=ParseMode.HTML,
-    )
+        parse_mode=ParseMode.HTML)
 
 
 async def help_cmd(update, context):
     uid = update.effective_user.id
-    lang = LANG.get(str(uid), "en")
-    if lang == "ru":
-        lines = [
-            "🎩 <b>J.A.R.V.I.S. — Команды</b>",
-            "",
-            "🟢 /start /help /reset /mode /vibe /lang /id /incognito /incognito_off",
-            "🎨 /draw /qr /tts /poll /quiz /speed /screenshot /translate /summarize",
-            "🧮 /calc /currency /weather /time /timer /remind /todo /password /uuid /convert /bmi",
-            "✍️ /improve /fix /shorten /expand /style /keywords /theses /tone",
-            "🖼 /upscale /compress /sticker /ocr /colors /exif",
-            "🔒 /invite /redeem /intruders /prune /silent /announce /lockdown",
-            "💻 /diff /commit /dockerfile /gitignore /json /b64 /hash /cron /jwt /urlenc",
-            "🗂 /diary /secret /task /habit /money",
-            "📊 /monitor /rss",
-            "🌈 /gif /meme /horoscope /recipe",
-            "🛡 /admin /add /remove /whitelist /ban /unban /mute /warn /warnings",
-            "  /broadcast /send /backup /logs /export_logs",
-            "🧠 /review /regex /sql /explain /refactor /uml /pytest /doc /cv /ask",
-            "⚙️ /export_whitelist /clear_session /report /tickets /close_ticket /stats /health /stopwords",
-        ]
-    else:
-        lines = [
-            "🎩 <b>J.A.R.V.I.S. — Commands</b>",
-            "",
-            "🟢 /start /help /reset /mode /vibe /lang /id /incognito /incognito_off",
-            "🎨 /draw /qr /tts /poll /quiz /speed /screenshot /translate /summarize",
-            "🧮 /calc /currency /weather /time /timer /remind /todo /password /uuid /convert /bmi",
-            "✍️ /improve /fix /shorten /expand /style /keywords /theses /tone",
-            "🖼 /upscale /compress /sticker /ocr /colors /exif",
-            "🔒 /invite /redeem /intruders /prune /silent /announce /lockdown",
-            "💻 /diff /commit /dockerfile /gitignore /json /b64 /hash /cron /jwt /urlenc",
-            "🗂 /diary /secret /task /habit /money",
-            "📊 /monitor /rss",
-            "🌈 /gif /meme /horoscope /recipe",
-            "🛡 /admin /add /remove /whitelist /ban /unban /mute /warn /warnings",
-            "  /broadcast /send /backup /logs /export_logs",
-            "🧠 /review /regex /sql /explain /refactor /uml /pytest /doc /cv /ask",
-            "⚙️ /export_whitelist /clear_session /report /tickets /close_ticket /stats /health /stopwords",
-        ]
+    ru = LANG.get(str(uid), "en") == "ru"
+    lines = [
+        "🎩 <b>J.A.R.V.I.S.</b>" + (" — что я умею" if ru else " — what I can do"),
+        "",
+        "💬 <i>" + ("Просто пиши мне как человеку:" if ru else "Just write naturally:") + "</i>",
+        "  • " + ("«нарисуй бургер» → нарисую" if ru else "«draw a burger» → I draw"),
+        "  • " + ("«озвучь привет» → озвучу" if ru else "«say hello» → I voice"),
+        "  • " + ("«переведи hello» → переведу" if ru else "«translate hello» → I translate"),
+        "  • " + ("«какая погода в Москве?» → скажу" if ru else "«weather in Moscow?» → I tell"),
+        "  • " + ("«что нового?» → найду новости" if ru else "«what's new?» → news"),
+        "  • " + ("«покажи мем» → пришлю мем" if ru else "«show meme» → meme"),
+        "",
+        "📋 <b>" + ("Основные команды:" if ru else "Main commands:") + "</b>",
+        "/start /help /reset /lang /mode /vibe /id",
+        "/draw /qr /tts /translate /summarize /speed /screenshot /poll /quiz",
+        "/news /meme /search /wiki /weather",
+        "/admin — " + ("панель босса" if ru else "boss panel"),
+        "",
+        "🧠 <b>AI Pro:</b> /review /refactor /sql /explain /regex /uml /pytest /doc /cv /ask",
+        "✍️ <b>Текст:</b> /improve /fix /shorten /expand /keywords /theses /style /tone",
+        "🖼 <b>Фото:</b> /upscale /compress /sticker /ocr /colors /exif",
+        "🗂 <b>Личное:</b> /diary /secret /task /habit /money",
+        "🛠 <b>Dev:</b> /hash /b64 /json /diff /commit /dockerfile /gitignore /cron",
+        "🛡 <b>Модерация:</b> /mute /warn /warnings /ban /unban /add /remove",
+        "⚙️ <b>Прочее:</b> /stats /health /report /tickets /close_ticket /intruders /prune",
+        "  /export_whitelist /clear_session /stopwords",
+        "",
+        "🎩 " + ("Всё остальное — просто спроси словами." if ru else "Anything else — just ask."),
+    ]
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
@@ -687,28 +591,36 @@ async def reset_cmd(update, context):
     await update.message.reply_text(t(uid, "memory_cleared"))
 
 
+async def lang_cmd(update, context):
+    uid = update.effective_user.id
+    if not context.args:
+        await update.message.reply_text(t(uid, "lang_current", cur=LANG.get(str(uid), "en")),
+            reply_markup=lang_keyboard(), parse_mode=ParseMode.HTML); return
+    new = context.args[0].lower()
+    if new not in ("ru", "en"): return
+    LANG[str(uid)] = new; save_lang()
+    await update.message.reply_text(t(uid, "lang_switched", lang=new), parse_mode=ParseMode.HTML)
+
+
 async def mode_cmd(update, context):
     uid = update.effective_user.id
     if not context.args:
-        await update.message.reply_text(t(uid, "mode_current", cur=USER_MODES.get(uid, "assistant"),
-            modes="assistant | tutor | programmer | psychologist"), parse_mode=ParseMode.HTML); return
+        await update.message.reply_text("assistant | tutor | programmer | psychologist"); return
     m = context.args[0].lower()
-    if m not in ("assistant", "tutor", "programmer", "psychologist"):
-        await update.message.reply_text(t(uid, "unknown_mode")); return
-    USER_MODES[uid] = m; USER_HISTORY.pop(uid, None); clear_history_redis(uid)
-    await update.message.reply_text(t(uid, "mode_switched", mode=m), parse_mode=ParseMode.HTML)
+    if m not in ("assistant", "tutor", "programmer", "psychologist"): return
+    USER_MODES[uid] = m
+    USER_HISTORY.pop(uid, None); clear_history_redis(uid)
+    await update.message.reply_text(f"✅ {m}")
 
 
 async def vibe_cmd(update, context):
     uid = update.effective_user.id
     if not context.args:
-        await update.message.reply_text(f"🎭 {USER_VIBES.get(uid,'formal')}\n\n/vibe formal|casual|sarcastic"); return
+        await update.message.reply_text(f"🎭 {USER_VIBES.get(uid,'formal')}\n/vibe formal|casual|sarcastic"); return
     v = context.args[0].lower()
-    if v not in ("formal", "casual", "sarcastic"):
-        await update.message.reply_text("❌ formal|casual|sarcastic"); return
+    if v not in ("formal", "casual", "sarcastic"): return
     USER_VIBES[uid] = v
-    state["VIBE"][str(uid)] = v; save_state()
-    await update.message.reply_text(t(uid, "vibe_set", vibe=v), parse_mode=ParseMode.HTML)
+    await update.message.reply_text(f"🎭 {v}")
 
 
 async def id_cmd(update, context):
@@ -719,25 +631,13 @@ async def id_cmd(update, context):
 
 
 async def incognito_cmd(update, context):
-    uid = update.effective_user.id; INCOGNITO_USERS.add(uid)
+    uid = update.effective_user.id; INCOGNITO.add(uid)
     await update.message.reply_text(t(uid, "incog_on"))
 
 
 async def incognito_off_cmd(update, context):
-    uid = update.effective_user.id; INCOGNITO_USERS.discard(uid)
+    uid = update.effective_user.id; INCOGNITO.discard(uid)
     await update.message.reply_text(t(uid, "incog_off"))
-
-
-async def lang_cmd(update, context):
-    uid = update.effective_user.id
-    if not context.args:
-        await update.message.reply_text(t(uid, "lang_current", cur=LANG.get(str(uid), "en")),
-            reply_markup=lang_keyboard(), parse_mode=ParseMode.HTML); return
-    new = context.args[0].lower()
-    if new not in ("ru", "en"):
-        await update.message.reply_text(t(uid, "lang_unknown")); return
-    LANG[str(uid)] = new; save_lang()
-    await update.message.reply_text(t(uid, "lang_switched", lang=new), parse_mode=ParseMode.HTML)
 
 
 async def text_handler(update, context):
@@ -750,31 +650,29 @@ async def text_handler(update, context):
 
     msg = update.message.text or ""
 
-    if matches(msg, IDENTITY_TRIGGERS):
+    if matches(msg, ID_TRIGGERS):
         await update.message.reply_text(identity_reply(uid), parse_mode=ParseMode.HTML); return
     if matches(msg, CREATOR_TRIGGERS):
         await update.message.reply_text(creator_reply(uid), parse_mode=ParseMode.HTML); return
-    if matches(msg, OWNER_CLAIM_TRIGGERS):
-        await update.message.reply_text(owner_claim_reply(uid), parse_mode=ParseMode.HTML); return
+    if matches(msg, CLAIM_TRIGGERS):
+        await update.message.reply_text(claim_reply(uid), parse_mode=ParseMode.HTML); return
     if uid != OWNER_ID and any(n in msg.lower() for n in OWNER_NAMES):
         await update.message.reply_text(creator_reply(uid), parse_mode=ParseMode.HTML); return
 
-    for w in STOP_WORDS:
-        if w.lower() in msg.lower() and uid != OWNER_ID:
-            try: await context.bot.send_message(OWNER_ID, f"⚠️ Stop-word <code>{uid}</code>: {msg[:200]}", parse_mode=ParseMode.HTML)
-            except: pass
+    if await natural_router(update, context, msg):
+        return
 
     if update.message.reply_to_message and update.message.reply_to_message.text:
         msg = f"[Replying to: {update.message.reply_to_message.text}]\n\n{msg}"
 
-    load_history_from_redis(uid)
+    load_history(uid)
     await context.bot.send_chat_action(update.effective_chat.id, ChatAction.TYPING)
     status = await update.message.reply_text(t(uid, "processing"), parse_mode=ParseMode.HTML)
     try:
         reply = await call_gemini(msg, uid)
-        try: await status.edit_text(reply, parse_mode=ParseMode.MARKDOWN)
+        try:    await status.edit_text(reply, parse_mode=ParseMode.MARKDOWN)
         except:
-            try: await status.edit_text(reply)
+            try:    await status.edit_text(reply)
             except: await update.message.reply_text(reply[:4000])
     except Exception as e:
         logger.exception(f"Text: {e}")
@@ -789,28 +687,33 @@ async def draw_cmd(update, context):
     if not context.args:
         await update.message.reply_text("🎨 /draw <desc>"); return
     desc = " ".join(context.args)
+
+    if not CF_ACCOUNT_ID or not CF_API_TOKEN:
+        await update.message.reply_text("⚠️ Cloudflare не настроен."); return
+
     await context.bot.send_chat_action(update.effective_chat.id, ChatAction.UPLOAD_PHOTO)
     status = await update.message.reply_text(t(uid, "draw_processing"), parse_mode=ParseMode.HTML)
     try:
         enhance = (
             f"Convert this image request into a detailed English image-generation prompt.\n"
             f"Request: {desc}\n\n"
-            f"Rules:\n"
-            f"- Preserve the original subject EXACTLY\n"
+            f"Rules:\n- Preserve the original subject EXACTLY\n"
             f"- Add composition, style, lighting, atmosphere, camera angle\n"
             f"- Return ONLY the English prompt. No quotes. No explanations."
         )
         enh = await call_gemini(enhance, uid)
-        seed = random.randint(1, 999999)
-        encoded = urllib.parse.quote(enh.strip())
-        url = f"https://image.pollinations.ai/prompt/{encoded}?width=1024&height=1024&nologo=true&seed={seed}"
-        r = requests.get(url, timeout=90)
+        url = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/ai/run/{CF_MODEL}"
+        headers = {"Authorization": f"Bearer {CF_API_TOKEN}", "Content-Type": "application/json"}
+        payload = {"prompt": enh.strip()[:2048], "seed": random.randint(1, 999999), "steps": 8}
+        r = requests.post(url, json=payload, headers=headers, timeout=90)
         r.raise_for_status()
-        if len(r.content) < 1000:
-            raise ValueError("Empty image")
-        img = Image.open(io.BytesIO(r.content)).convert("RGB")
+        data = r.json()
+        if not data.get("success") or not data.get("result", {}).get("image"):
+            raise ValueError(f"Cloudflare: {data.get('errors', 'no image')}")
+        img_bytes = base64.b64decode(data["result"]["image"])
+        img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
         img.thumbnail((1280, 1280))
-        out = io.BytesIO(); img.save(out, format="JPEG", quality=85); out.seek(0)
+        out = io.BytesIO(); img.save(out, format="JPEG", quality=90); out.seek(0)
         await update.message.reply_photo(photo=out, caption=f"🎨 <i>{desc[:100]}</i>", parse_mode=ParseMode.HTML)
         await status.delete()
     except Exception as e:
@@ -824,10 +727,11 @@ async def qr_cmd(update, context):
     if not text or len(text) > 1000:
         await update.message.reply_text("🔳 1-1000 chars."); return
     try:
-        img = qrcode.make(text); out = io.BytesIO(); img.save(out, "PNG"); out.seek(0)
+        img = qrcode.make(text)
+        out = io.BytesIO(); img.save(out, "PNG"); out.seek(0)
         await update.message.reply_photo(photo=out)
     except Exception as e:
-        logger.exception(f"QR: {e}"); await update.message.reply_text(t(uid, "qr_fail"))
+        logger.exception(f"QR: {e}")
 
 
 async def tts_cmd(update, context):
@@ -838,11 +742,205 @@ async def tts_cmd(update, context):
     try:
         out = io.BytesIO()
         gTTS(text=text, lang="ru" if LANG.get(str(uid), "en") == "ru" else "en").write_to_fp(out)
-        out.seek(0); await update.message.reply_voice(voice=out)
+        out.seek(0)
+        await update.message.reply_voice(voice=out)
     except Exception as e:
-        logger.exception(f"TTS: {e}"); await update.message.reply_text(t(uid, "tts_fail"))
+        logger.exception(f"TTS: {e}")
 
 
+async def news_cmd(update, context):
+    uid = update.effective_user.id
+    topic = " ".join(context.args) if context.args else ""
+    if not CURRENTS_KEY:
+        await update.message.reply_text("⚠️ Currents не настроен."); return
+    try:
+        if topic:
+            url = f"https://api.currentsapi.services/v1/search?apiKey={CURRENTS_KEY}&keywords={urllib.parse.quote(topic)}&language=ru&page_size=5"
+        else:
+            url = f"https://api.currentsapi.services/v1/latest-news?apiKey={CURRENTS_KEY}&language=ru&page_size=5"
+        r = requests.get(url, timeout=20); r.raise_for_status()
+        data = r.json()
+        news = data.get("news", [])[:5]
+        if not news:
+            await update.message.reply_text("📰 Не нашёл новостей."); return
+        lines = [f"📰 <b>Новости{f' по {topic}' if topic else ''}</b>", ""]
+        for n in news:
+            lines.append(f"• <a href='{n.get('url','')}'>{n.get('title','')[:100]}</a>")
+        await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+    except Exception as e:
+        logger.exception(f"News: {e}")
+        await update.message.reply_text(f"⚠️ {e}")
+
+
+async def meme_cmd(update, context):
+    uid = update.effective_user.id
+    topic = " ".join(context.args).lower().strip() if context.args else ""
+    try:
+        if topic:
+            url = f"https://www.reddit.com/r/memes/search.json?q={urllib.parse.quote(topic)}&restrict_sr=on&sort=hot&limit=5&t=day"
+        else:
+            url = "https://www.reddit.com/r/memes/hot.json?limit=5"
+        headers = {"User-Agent": "JarvisBot/1.0"}
+        r = requests.get(url, headers=headers, timeout=15); r.raise_for_status()
+        data = r.json()
+        posts = [p["data"] for p in data.get("data", {}).get("children", [])
+                 if not p["data"].get("is_video") and p["data"].get("post_hint") == "image"]
+        if not posts:
+            await update.message.reply_text("😐 Мемов не нашёл."); return
+        p = random.choice(posts)
+        await update.message.reply_photo(photo=p["url"], caption=p.get("title", "")[:200])
+    except Exception as e:
+        logger.exception(f"Meme: {e}")
+        await update.message.reply_text(f"⚠️ {e}")
+
+
+async def search_cmd(update, context):
+    uid = update.effective_user.id
+    q = " ".join(context.args)
+    if not q:
+        await update.message.reply_text("🔎 /search <запрос>"); return
+    try:
+        url = f"https://api.duckduckgo.com/?q={urllib.parse.quote(q)}&format=json&no_html=1&skip_disambig=1"
+        r = requests.get(url, timeout=15); r.raise_for_status()
+        data = r.json()
+        abstract = data.get("AbstractText", "")
+        answer = data.get("Answer", "")
+        related = data.get("RelatedTopics", [])
+        lines = [f"🔎 <b>{q}</b>", ""]
+        if answer: lines.append(f"✅ {answer}")
+        if abstract: lines.append(abstract[:500])
+        for rt in related[:3]:
+            if isinstance(rt, dict) and rt.get("Text"):
+                lines.append(f"• {rt['Text'][:120]}")
+        if len(lines) <= 2:
+            reply = await call_gemini(f"Актуальная информация: {q}", uid)
+            lines.append(reply[:500])
+        await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+    except Exception as e:
+        logger.exception(f"Search: {e}")
+        await update.message.reply_text(f"⚠️ {e}")
+
+
+async def wiki_cmd(update, context):
+    uid = update.effective_user.id
+    q = " ".join(context.args)
+    if not q:
+        await update.message.reply_text("📚 /wiki <запрос>"); return
+    try:
+        url = f"https://ru.wikipedia.org/api/rest_v1/page/summary/{urllib.parse.quote(q)}"
+        r = requests.get(url, timeout=15)
+        if r.status_code == 200:
+            data = r.json()
+            extract = data.get("extract", "")
+            link = data.get("content_urls", {}).get("desktop", {}).get("page", "")
+            if extract:
+                await update.message.reply_text(
+                    f"📚 <b>{data.get('title','')}</b>\n\n{extract[:800]}\n\n<a href='{link}'>Wikipedia</a>",
+                    parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+                return
+        reply = await call_gemini(f"Расскажи кратко: {q}", uid)
+        await update.message.reply_text(reply[:1000])
+    except Exception as e:
+        logger.exception(f"Wiki: {e}")
+        reply = await call_gemini(f"Расскажи кратко: {q}", uid)
+        await update.message.reply_text(reply[:1000])
+
+
+async def translate_cmd(update, context):
+    uid = update.effective_user.id
+    if len(context.args) < 2:
+        await update.message.reply_text("🌐 /translate <lang> <text>"); return
+    lang, text = context.args[0], " ".join(context.args[1:])
+    try:
+        reply = await call_gemini(f"Translate to {lang}. Return ONLY translation:\n\n{text}", uid)
+        await update.message.reply_text(reply)
+    except Exception as e:
+        logger.exception(f"Translate: {e}")
+
+
+async def weather_cmd(update, context):
+    city = " ".join(context.args) or "Moscow"
+    try:
+        r = requests.get(f"https://wttr.in/{urllib.parse.quote(city)}?format=j1", timeout=20); r.raise_for_status()
+        c = r.json()["current_condition"][0]
+        msg = (f"🌤 <b>{city}</b>\n\n  Temp: {c['temp_C']}°C\n  Feels: {c['FeelsLikeC']}°C\n"
+               f"  Wind: {c['windspeedKmph']} km/h\n  Humidity: {c['humidity']}%\n  {c['weatherDesc'][0]['value']}")
+        await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+    except Exception as e:
+        await update.message.reply_text(f"⚠️ {e}")
+
+
+async def poll_cmd(update, context):
+    parts = [p.strip() for p in " ".join(context.args).split("|") if p.strip()]
+    if len(parts) < 3:
+        await update.message.reply_text("📊 /poll Q | A | B"); return
+    try:
+        await context.bot.send_poll(update.effective_chat.id, question=parts[0], options=parts[1:])
+    except Exception as e:
+        logger.exception(f"Poll: {e}")
+
+
+async def quiz_cmd(update, context):
+    uid = update.effective_user.id
+    topic = " ".join(context.args) or "General"
+    try:
+        prompt = f'Quiz about {topic}. JSON: {{"question":"","options":["A","B","C","D"],"correct_id":0,"explanation":""}}'
+        reply = await call_gemini(prompt, uid, json_mode=True, system_instruction="Output valid JSON.")
+        def _x(t):
+            s, e = t.find("{"), t.rfind("}")
+            return t[s:e+1] if s != -1 and e != -1 else t
+        data = json.loads(_x(reply))
+        await context.bot.send_poll(update.effective_chat.id, question=data["question"], options=data["options"],
+            type=Poll.QUIZ, correct_option_id=data["correct_id"], explanation=data.get("explanation"))
+    except Exception as e:
+        logger.exception(f"Quiz: {e}")
+
+
+async def speed_cmd(update, context):
+    uid = update.effective_user.id
+    r = update.message.reply_to_message
+    if not r or not r.voice:
+        await update.message.reply_text(t(uid, "no_voice")); return
+    if not context.args: return
+    try:
+        factor = float(context.args[0])
+        f = await r.voice.get_file(); data = await f.download_as_bytearray()
+        audio = AudioSegment.from_file(io.BytesIO(data), format="ogg")
+        fast = audio._spawn(audio.raw_data, overrides={"frame_rate": int(audio.frame_rate * factor)}).set_frame_rate(audio.frame_rate)
+        out = io.BytesIO(); fast.export(out, format="ogg", codec="libopus"); out.seek(0)
+        await update.message.reply_voice(voice=out)
+    except Exception as e:
+        logger.exception(f"Speed: {e}")
+
+
+async def screenshot_cmd(update, context):
+    if not context.args: return
+    url = context.args[0]
+    if not url.startswith("http"): url = "https://" + url
+    try:
+        r = requests.get(f"https://image.thum.io/get/width/1200/crop/900/{url}", timeout=30)
+        await update.message.reply_photo(photo=io.BytesIO(r.content))
+    except Exception as e:
+        logger.exception(f"Screenshot: {e}")
+
+
+async def summarize_cmd(update, context):
+    uid = update.effective_user.id
+    text = ""
+    if update.message.reply_to_message and update.message.reply_to_message.text:
+        text = update.message.reply_to_message.text
+    elif context.args: text = " ".join(context.args)
+    if not text: return
+    try:
+        reply = await call_gemini(f"Summarize:\n\n{text}", uid)
+        await update.message.reply_text(reply)
+    except Exception as e:
+        logger.exception(f"Summarize: {e}")
+
+
+# ============================================================
+#  MEDIA HANDLERS
+# ============================================================
 def _decode_qr(data):
     try:
         arr = np.frombuffer(bytes(data), np.uint8)
@@ -863,14 +961,14 @@ async def photo_handler(update, context):
         data = await f.download_as_bytearray()
         qr = _decode_qr(bytes(data))
         if qr:
-            await update.message.reply_text(f"{t(uid,'qr_decoded')}\n\n<code>{qr}</code>", parse_mode=ParseMode.HTML); return
-        await context.bot.send_chat_action(update.effective_chat.id, ChatAction.TYPING)
+            await update.message.reply_text(f"🔳 <b>QR</b>\n<code>{qr}</code>", parse_mode=ParseMode.HTML); return
         caption = update.message.caption or ("Опиши изображение." if LANG.get(str(uid)) == "ru" else "Describe.")
         part = types.Part.from_bytes(data=bytes(data), mime_type="image/jpeg")
         reply = await call_gemini(caption, uid, media_parts=[part])
         await update.message.reply_text(reply)
     except Exception as e:
-        logger.exception(f"Photo: {e}"); await update.message.reply_text(t(uid, "img_analysis"))
+        logger.exception(f"Photo: {e}")
+        await update.message.reply_text(t(uid, "img_fail"))
 
 
 async def sticker_handler(update, context):
@@ -887,7 +985,7 @@ async def sticker_handler(update, context):
         reply = await call_gemini("Explain this sticker's meme context.", uid, media_parts=[part])
         await update.message.reply_text(reply)
     except Exception as e:
-        logger.exception(f"Sticker: {e}"); await update.message.reply_text(t(uid, "sticker_fail"))
+        logger.exception(f"Sticker: {e}")
 
 
 async def voice_handler(update, context):
@@ -896,46 +994,46 @@ async def voice_handler(update, context):
         await update.message.reply_text(t(uid, "audio_received"))
         f = await update.message.voice.get_file()
         data = await f.download_as_bytearray()
-        part = types.Part.from_bytes(data=bytes(data), mime_type="audio/ogg")
+        part = await upload_media_to_gemini(bytes(data), "audio/ogg", uid)
         reply = await call_gemini(
-            "Transcribe this voice message. Then briefly react to its content.",
+            "Transcribe this voice message accurately. Then briefly react.",
             uid, media_parts=[part])
         await update.message.reply_text(f"{t(uid,'transcription')}\n\n{reply}", parse_mode=ParseMode.HTML)
     except Exception as e:
-        logger.exception(f"Voice: {e}"); await update.message.reply_text(t(uid, "audio_fail"))
+        logger.exception(f"Voice: {e}")
+        await update.message.reply_text(t(uid, "audio_fail"))
 
 
 async def video_handler(update, context):
-    """Handles both regular videos and round video notes. Gemini understands frames + audio."""
     uid = update.effective_user.id
     try:
-        media = update.message.video or update.message.video_note
-        if not media:
-            return
-        # Telegram limit: video_note max 1 min, small. Regular video may be larger.
+        media = update.message.video_note or update.message.video
+        if not media: return
         file_size = getattr(media, "file_size", 0) or 0
         if file_size > 20 * 1024 * 1024:
-            await update.message.reply_text("⚠️ Видео больше 20 MB, сэр. Пришлите короче.")
-            return
+            await update.message.reply_text("⚠️ Видео >20 MB, сэр."); return
         await update.message.reply_text(t(uid, "video_received"))
         f = await media.get_file()
         data = await f.download_as_bytearray()
-        mime = "video/mp4"
-        part = types.Part.from_bytes(data=bytes(data), mime_type=mime)
+        part = await upload_media_to_gemini(bytes(data), "video/mp4", uid)
         prompt = (
-            "Analyze this video: describe the scene, environment, objects, and transcribe any speech. "
-            "Comment on the surroundings and what's happening."
+            "Analyze this video carefully:\n"
+            "1. Describe the scene and environment (room layout, objects, background).\n"
+            "2. Transcribe any speech you hear.\n"
+            "3. Comment on what's happening.\n"
+            "Reply in the user's language."
         )
         reply = await call_gemini(prompt, uid, media_parts=[part])
         await update.message.reply_text(reply)
     except Exception as e:
-        logger.exception(f"Video: {e}"); await update.message.reply_text(t(uid, "video_fail"))
+        logger.exception(f"Video: {e}")
+        await update.message.reply_text(t(uid, "video_fail"))
 
 
 async def animation_handler(update, context):
     uid = update.effective_user.id
     try:
-        await update.message.reply_text("🎞 GIF получен, сэр. Что с ним сделать? Опишите задачу.")
+        await update.message.reply_text("🎞 GIF получен, сэр. Что с ним сделать?")
     except Exception as e:
         logger.exception(f"Animation: {e}")
 
@@ -947,270 +1045,87 @@ async def document_handler(update, context):
         if doc.file_size > 20 * 1024 * 1024:
             await update.message.reply_text("⚠️ Max 20 MB."); return
         ext = os.path.splitext(doc.file_name)[1].lower()
-
-        if ext in (".zip", ".rar", ".7z", ".tar", ".gz", ".bz2"):
+        if ext in (".zip", ".rar", ".7z", ".tar", ".gz"):
             await update.message.reply_text(t(uid, "zip_received")); return
-
-        code_exts = (".py", ".js", ".ts", ".json", ".html", ".css", ".md", ".txt",
-                     ".yaml", ".yml", ".toml", ".ini", ".cfg", ".sh", ".bash",
-                     ".java", ".c", ".cpp", ".h", ".go", ".rs", ".rb", ".php",
-                     ".sql", ".xml", ".csv", ".log", ".env")
-
-        if ext in code_exts:
-            f = await doc.get_file()
-            data = await f.download_as_bytearray()
-            text = data.decode("utf-8", errors="ignore")[:30000]
-            if not text.strip():
-                await update.message.reply_text(t(uid, "no_text")); return
-            user_prompt = update.message.caption or "Review this code. List issues, suggest improvements. Be concise."
-            await context.bot.send_chat_action(update.effective_chat.id, ChatAction.TYPING)
-            status = await update.message.reply_text(t(uid, "processing"), parse_mode=ParseMode.HTML)
-            reply = await call_gemini(f"{user_prompt}\n\nFile: {doc.file_name}\n\n```\n{text}\n```", uid)
-            try: await status.edit_text(reply[:4000])
-            except: await update.message.reply_text(reply[:4000])
-            return
-
-        if ext not in (".pdf", ".docx"):
-            return
-
         f = await doc.get_file()
         data = await f.download_as_bytearray()
         if ext == ".pdf":
             reader = PdfReader(io.BytesIO(data))
-            text = "".join(p.extract_text() or "" for p in reader.pages)
-        else:
+            text = "".join(p.extract_text() or "" for p in reader.pages)[:30000]
+        elif ext == ".docx":
             d = docx.Document(io.BytesIO(data))
-            text = "\n".join(p.text for p in d.paragraphs)
-        text = text[:30000]
+            text = "\n".join(p.text for p in d.paragraphs)[:30000]
+        else:
+            text = data.decode("utf-8", errors="ignore")[:30000]
         if not text.strip():
             await update.message.reply_text(t(uid, "no_text")); return
-        reply = await call_gemini(f"Summarize:\n\n{text}", uid)
-        await update.message.reply_text(reply)
+        reply = await call_gemini(f"Review this document:\n\n{text}", uid)
+        await update.message.reply_text(reply[:4000])
     except Exception as e:
-        logger.exception(f"Doc: {e}"); await update.message.reply_text(t(uid, "doc_fail"))
+        logger.exception(f"Doc: {e}")
+        await update.message.reply_text(t(uid, "doc_fail"))
 
 
-async def poll_cmd(update, context):
-    parts = [p.strip() for p in " ".join(context.args).split("|") if p.strip()]
-    if len(parts) < 3 or len(parts) > 11:
-        await update.message.reply_text("📊 /poll Q | A | B"); return
-    try:
-        await context.bot.send_poll(update.effective_chat.id, question=parts[0], options=parts[1:])
-    except Exception as e:
-        logger.exception(f"Poll: {e}")
-
-
-async def quiz_cmd(update, context):
+# ============================================================
+#  AI PRO
+# ============================================================
+async def _ai(update, context, instruction, need_reply=False):
     uid = update.effective_user.id
-    topic = " ".join(context.args) or "General knowledge"
+    if need_reply:
+        r = update.message.reply_to_message
+        if not r or not (r.text or r.caption):
+            await update.message.reply_text(t(uid, "no_reply")); return
+        text = r.text or r.caption
+    else:
+        text = " ".join(context.args)
+    if not text and not need_reply:
+        await update.message.reply_text("✏️ Provide arguments."); return
+    status = await update.message.reply_text(t(uid, "processing"), parse_mode=ParseMode.HTML)
     try:
-        prompt = f'Quiz about {topic}. JSON: {{"question":"","options":["A","B","C","D"],"correct_id":0,"explanation":""}}'
-        reply = await call_gemini(prompt, uid, json_mode=True, system_instruction="Output valid JSON.")
-        def _x(t):
-            s, e = t.find("{"), t.rfind("}")
-            return t[s:e+1] if s != -1 and e != -1 else t
-        data = json.loads(_x(reply))
-        await context.bot.send_poll(update.effective_chat.id, question=data["question"], options=data["options"],
-            type=Poll.QUIZ, correct_option_id=data["correct_id"], explanation=data.get("explanation"))
+        reply = await call_gemini(f"{instruction}\n\nINPUT:\n{text}", uid)
+        try: await status.edit_text(reply[:4000], parse_mode=ParseMode.MARKDOWN)
+        except: await status.edit_text(reply[:4000])
+        for i in range(4000, len(reply), 4000):
+            await update.message.reply_text(reply[i:i+4000])
     except Exception as e:
-        logger.exception(f"Quiz: {e}"); await update.message.reply_text("⚠️ Quiz error.")
+        logger.exception(f"AI: {e}"); await status.edit_text(t(uid, "req_error"))
 
 
-async def speed_cmd(update, context):
+async def review_cmd(update, context):    await _ai(update, context, "Review this code: bugs, security, style. Suggest fixes.", need_reply=True)
+async def regex_cmd(update, context):     await _ai(update, context, "Generate regex for the described task. Return only pattern + test example.")
+async def sql_cmd(update, context):       await _ai(update, context, "Write SQL for the task. Add one-line explanation.")
+async def explain_cmd(update, context):   await _ai(update, context, "Explain this code line by line.", need_reply=True)
+async def refactor_cmd(update, context):  await _ai(update, context, "Refactor this code. Return optimized version + change list.", need_reply=True)
+async def uml_cmd(update, context):       await _ai(update, context, "Return a PlantUML diagram for the described code.")
+async def pytest_cmd(update, context):    await _ai(update, context, "Generate pytest file for this code. Return only Python.", need_reply=True)
+async def doc_cmd(update, context):       await _ai(update, context, "Add PEP-8 docstrings and comments. Preserve logic.", need_reply=True)
+async def cv_cmd(update, context):        await _ai(update, context, "Structure raw bio into Markdown CV: Summary, Experience, Skills, Education.")
+
+
+async def translate_long_cmd(update, context):
+    if len(context.args) < 2:
+        await update.message.reply_text("🌐 /translate_long <lang> <text>"); return
+    lang, text = context.args[0], " ".join(context.args[1:])
+    await _ai(update, context, f"Translate to {lang}. Preserve formatting.\n---\n{text}")
+
+
+async def ask_cmd(update, context):
     uid = update.effective_user.id
     r = update.message.reply_to_message
-    if not r or not r.voice:
-        await update.message.reply_text(t(uid, "no_voice")); return
-    if not context.args: return
+    if not r or not r.text:
+        await update.message.reply_text(t(uid, "no_reply")); return
+    q = " ".join(context.args)
+    doc = r.text[:30000]
+    status = await update.message.reply_text(t(uid, "processing"), parse_mode=ParseMode.HTML)
     try:
-        factor = float(context.args[0])
-        if not 1.0 < factor <= 4.0:
-            await update.message.reply_text("⚡ 1.1-4.0"); return
-        f = await r.voice.get_file(); data = await f.download_as_bytearray()
-        audio = AudioSegment.from_file(io.BytesIO(data), format="ogg")
-        fast = audio._spawn(audio.raw_data, overrides={"frame_rate": int(audio.frame_rate * factor)}).set_frame_rate(audio.frame_rate)
-        out = io.BytesIO(); fast.export(out, format="ogg", codec="libopus"); out.seek(0)
-        await update.message.reply_voice(voice=out)
+        reply = await call_gemini(f"Answer based ONLY on this document.\n\n{doc}\n\nQ: {q}", uid)
+        await status.edit_text(reply[:4000])
     except Exception as e:
-        logger.exception(f"Speed: {e}"); await update.message.reply_text(t(uid, "audio_fail"))
-
-
-async def screenshot_cmd(update, context):
-    if not context.args: return
-    url = context.args[0]
-    if not url.startswith("http"): url = "https://" + url
-    try:
-        r = requests.get(f"https://image.thum.io/get/width/1200/crop/900/{url}", timeout=30); r.raise_for_status()
-        await update.message.reply_photo(photo=io.BytesIO(r.content))
-    except Exception as e:
-        logger.exception(f"Screenshot: {e}"); await update.message.reply_text("⚠️ Screenshot error.")
-
-
-async def translate_cmd(update, context):
-    uid = update.effective_user.id
-    if len(context.args) < 2: return
-    lang, text = context.args[0], " ".join(context.args[1:])
-    try:
-        reply = await call_gemini(f"Translate to {lang}:\n\n{text}", uid, system_instruction="Return ONLY translation.")
-        await update.message.reply_text(reply)
-    except Exception as e: logger.exception(f"Translate: {e}")
-
-
-async def summarize_cmd(update, context):
-    uid = update.effective_user.id
-    text = ""
-    if update.message.reply_to_message and update.message.reply_to_message.text:
-        text = update.message.reply_to_message.text
-    elif context.args: text = " ".join(context.args)
-    if not text: return
-    try:
-        reply = await call_gemini(f"Summarize:\n\n{text}", uid)
-        await update.message.reply_text(reply)
-    except Exception as e: logger.exception(f"Summarize: {e}")
+        logger.exception(f"Ask: {e}"); await status.edit_text(t(uid, "req_error"))
 
 
 # ============================================================
-#  MODULE B — UTILITIES
-# ============================================================
-async def calc_cmd(update, context):
-    expr = " ".join(context.args)
-    if not expr:
-        await update.message.reply_text("🧮 /calc 2+2*2"); return
-    if not re.match(r"^[0-9+\-*/().%\s]+$", expr):
-        await update.message.reply_text("⚠️ Only digits +-*/()."); return
-    try:
-        r = eval(expr, {"__builtins__": {}}, {})
-        await update.message.reply_text(f"🧮 <code>{expr} = {r}</code>", parse_mode=ParseMode.HTML)
-    except Exception as e:
-        await update.message.reply_text(f"⚠️ {e}")
-
-
-async def currency_cmd(update, context):
-    if len(context.args) < 2:
-        await update.message.reply_text("💱 /currency USD RUB [amount]"); return
-    src, dst = context.args[0].upper(), context.args[1].upper()
-    amt = float(context.args[2]) if len(context.args) > 2 else 1.0
-    try:
-        r = requests.get(f"https://api.exchangerate-api.com/v4/latest/{src}", timeout=20); r.raise_for_status()
-        rate = r.json()["rates"][dst]
-        await update.message.reply_text(f"💱 {amt} {src} = <b>{amt*rate:.2f} {dst}</b>", parse_mode=ParseMode.HTML)
-    except Exception as e:
-        await update.message.reply_text(f"⚠️ {e}")
-
-
-async def weather_cmd(update, context):
-    city = " ".join(context.args) or "Moscow"
-    try:
-        r = requests.get(f"https://wttr.in/{urllib.parse.quote(city)}?format=j1", timeout=20); r.raise_for_status()
-        c = r.json()["current_condition"][0]
-        msg = (f"🌤 <b>{city}</b>\n\n  Temp: {c['temp_C']}°C\n  Feels: {c['FeelsLikeC']}°C\n"
-               f"  Wind: {c['windspeedKmph']} km/h\n  Humidity: {c['humidity']}%\n  {c['weatherDesc'][0]['value']}")
-        await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
-    except Exception as e:
-        await update.message.reply_text(f"⚠️ {e}")
-
-
-async def time_cmd(update, context):
-    await update.message.reply_text(f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} (server)")
-
-
-async def timer_cmd(update, context):
-    if not context.args:
-        await update.message.reply_text("⏱ /timer 5m"); return
-    d = parse_duration(context.args[0])
-    if not d or d == "perm":
-        await update.message.reply_text("⏱ 30s / 5m / 2h"); return
-    secs = int(d.total_seconds())
-    chat_id = update.effective_chat.id
-    async def fire(ctx):
-        try: await ctx.bot.send_message(chat_id, "⏱ <b>Timer!</b>", parse_mode=ParseMode.HTML)
-        except: pass
-    context.job_queue.run_once(fire, when=secs)
-    await update.message.reply_text(f"⏱ Таймер: {secs} сек.")
-
-
-async def remind_cmd(update, context):
-    if len(context.args) < 2:
-        await update.message.reply_text("⏰ /remind 30m text"); return
-    d = parse_duration(context.args[0])
-    if not d or d == "perm":
-        await update.message.reply_text("⏰ 30s / 5m / 2h"); return
-    text = " ".join(context.args[1:])
-    secs = int(d.total_seconds())
-    chat_id = update.effective_chat.id
-    async def fire(ctx):
-        try: await ctx.bot.send_message(chat_id, f"⏰ <b>Напоминание:</b> {text}", parse_mode=ParseMode.HTML)
-        except: pass
-    context.job_queue.run_once(fire, when=secs)
-    await update.message.reply_text(f"⏰ Напомню через {secs} сек.")
-
-
-async def todo_cmd(update, context):
-    uid = update.effective_user.id
-    ud = USERDATA.setdefault(str(uid), {})
-    todo = ud.setdefault("todo", [])
-    if not context.args or context.args[0].lower() == "list":
-        if not todo:
-            await update.message.reply_text("📝 /todo add Task | list | done N | clear"); return
-        lines = ["📝 <b>To-Do</b>", ""]
-        for i, x in enumerate(todo, 1):
-            m = "✅" if x.get("done") else "⬜"
-            lines.append(f"  {i}. {m} {x['text']}")
-        await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML); return
-    sub = context.args[0].lower()
-    if sub == "add":
-        text = " ".join(context.args[1:])
-        if text: todo.append({"text": text, "done": False}); save_userdata()
-        await update.message.reply_text("✅ Добавлено.")
-    elif sub == "done":
-        try: todo[int(context.args[1])-1]["done"] = True; save_userdata(); await update.message.reply_text("✅")
-        except: await update.message.reply_text("❌")
-    elif sub == "clear":
-        ud["todo"] = []; save_userdata(); await update.message.reply_text("🗑")
-
-
-async def password_cmd(update, context):
-    n = 16
-    if context.args:
-        try: n = max(8, min(128, int(context.args[0])))
-        except: pass
-    alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()-_=+"
-    pwd = "".join(random.choice(alphabet) for _ in range(n))
-    await update.message.reply_text(f"🔐 <code>{pwd}</code>", parse_mode=ParseMode.HTML)
-
-
-async def uuid_cmd(update, context):
-    await update.message.reply_text(f"🆔 <code>{uuid_lib.uuid4()}</code>", parse_mode=ParseMode.HTML)
-
-
-async def convert_cmd(update, context):
-    if len(context.args) < 3:
-        await update.message.reply_text("📏 /convert 5 km mi"); return
-    try:
-        val, src, dst = float(context.args[0]), context.args[1].lower(), context.args[2].lower()
-    except:
-        await update.message.reply_text("📏 /convert 5 km mi"); return
-    f = {"km":1000,"m":1,"cm":0.01,"mm":0.001,"mi":1609.34,"yd":0.9144,"ft":0.3048,"in":0.0254}
-    if src in f and dst in f:
-        await update.message.reply_text(f"📏 {val} {src} = <b>{val*f[src]/f[dst]:.4f} {dst}</b>", parse_mode=ParseMode.HTML)
-    else:
-        await update.message.reply_text("📏 km, m, cm, mm, mi, yd, ft, in")
-
-
-async def bmi_cmd(update, context):
-    if len(context.args) < 2:
-        await update.message.reply_text("⚖️ /bmi 80 180"); return
-    try:
-        w, h = float(context.args[0]), float(context.args[1])
-        bmi = w / ((h/100)**2)
-        cat = "underweight" if bmi < 18.5 else "normal" if bmi < 25 else "overweight" if bmi < 30 else "obese"
-        await update.message.reply_text(f"⚖️ BMI: <b>{bmi:.2f}</b> ({cat})", parse_mode=ParseMode.HTML)
-    except:
-        await update.message.reply_text("⚠️ Numbers.")
-
-
-# ============================================================
-#  MODULE C — TEXT
+#  TEXT TOOLS
 # ============================================================
 async def _text_ai(update, context, instruction):
     uid = update.effective_user.id
@@ -1260,7 +1175,7 @@ async def tone_cmd(update, context):
 
 
 # ============================================================
-#  MODULE D — IMAGES
+#  IMAGE TOOLS
 # ============================================================
 async def upscale_cmd(update, context):
     r = update.message.reply_to_message
@@ -1349,195 +1264,7 @@ async def exif_cmd(update, context):
 
 
 # ============================================================
-#  MODULE E — SECURITY
-# ============================================================
-@owner_only
-async def invite_cmd(update, context):
-    code = uuid_lib.uuid4().hex[:8]
-    INVITES[code] = {"created_by": OWNER_ID, "expires": (datetime.now() + timedelta(hours=24)).isoformat()}
-    save_invites()
-    await update.message.reply_text(f"🎫 <code>{code}</code>\n24ч. /redeem {code}", parse_mode=ParseMode.HTML)
-
-
-async def redeem_cmd(update, context):
-    uid = update.effective_user.id
-    if not context.args:
-        await update.message.reply_text("🎫 /redeem CODE"); return
-    code = context.args[0]
-    inv = INVITES.get(code)
-    if not inv:
-        await update.message.reply_text("❌ Invalid."); return
-    if datetime.fromisoformat(inv["expires"]) < datetime.now():
-        INVITES.pop(code, None); save_invites()
-        await update.message.reply_text("❌ Expired."); return
-    if uid not in state["WHITELIST"]:
-        state["WHITELIST"].append(uid); save_state()
-    INVITES.pop(code, None); save_invites()
-    await update.message.reply_text("✅ Access granted.")
-
-
-@owner_only
-async def intruders_cmd(update, context):
-    if not os.path.exists(INTRUDER_FILE):
-        await update.message.reply_text("📭 No data."); return
-    with open(INTRUDER_FILE, "r", encoding="utf-8") as f:
-        try: data = json.load(f)
-        except: data = []
-    if not data:
-        await update.message.reply_text("📭 Empty."); return
-    lines = ["🚨 <b>Intruders</b>", ""]
-    seen = set()
-    for x in data[-30:]:
-        u = x.get("user_id")
-        if u in seen: continue
-        seen.add(u)
-        lines.append(f"  <code>{u}</code> @{x.get('username','—')} ({x.get('first_name','')})")
-    await update.message.reply_text("\n".join(lines[:30]), parse_mode=ParseMode.HTML)
-
-
-@owner_only
-async def prune_cmd(update, context):
-    if not context.args:
-        await update.message.reply_text("🪓 /prune 30d"); return
-    d = parse_duration(context.args[0])
-    if not d or d == "perm":
-        await update.message.reply_text("🪓 30d | 7d | 24h"); return
-    thr = datetime.now() - d
-    removed = 0
-    for suid, s in list(USER_STATS.items()):
-        last = s.get("last_seen")
-        if last and datetime.fromisoformat(last) < thr:
-            try: state["WHITELIST"].remove(int(suid)); removed += 1
-            except: pass
-    save_state()
-    await update.message.reply_text(f"🪓 Removed: {removed}")
-
-
-@owner_only
-async def silent_cmd(update, context):
-    global SILENT_MODE
-    if not context.args:
-        await update.message.reply_text(f"🤫 {'ON' if SILENT_MODE else 'OFF'}"); return
-    SILENT_MODE = context.args[0].lower() == "on"
-    await update.message.reply_text(t(OWNER_ID, "silent_on" if SILENT_MODE else "silent_off"))
-
-
-@owner_only
-async def announce_cmd(update, context):
-    text = " ".join(context.args)
-    if not text:
-        await update.message.reply_text("📢 /announce text"); return
-    sent = failed = 0
-    for u in state["WHITELIST"]:
-        try:
-            await context.bot.send_message(u, f"📢 <b>Announcement</b>\n\n{text}", parse_mode=ParseMode.HTML)
-            sent += 1
-        except: failed += 1
-    await update.message.reply_text(f"📢 {sent}/{failed}")
-
-
-@owner_only
-async def lockdown_cmd(update, context):
-    global LOCKDOWN
-    if not context.args:
-        await update.message.reply_text(f"🔒 {'ON' if LOCKDOWN else 'OFF'}"); return
-    LOCKDOWN = context.args[0].lower() == "on"
-    state["LOCKDOWN"] = LOCKDOWN; save_state()
-    await update.message.reply_text(t(OWNER_ID, "lockdown_on" if LOCKDOWN else "lockdown_off"))
-
-
-# ============================================================
-#  MODULE F — DEV
-# ============================================================
-async def diff_cmd(update, context):     await _text_ai(update, context, "Explain this git diff in plain language.")
-async def commit_cmd(update, context):   await _text_ai(update, context, "Generate a Conventional Commit message for this diff.")
-
-
-async def dockerfile_cmd(update, context):
-    uid = update.effective_user.id
-    topic = " ".join(context.args) or "python app"
-    reply = await call_gemini(f"Optimized multi-stage Dockerfile for: {topic}. Return only Dockerfile.", uid)
-    await update.message.reply_text(f"<pre>{reply[:3800]}</pre>", parse_mode=ParseMode.HTML)
-
-
-async def gitignore_cmd(update, context):
-    uid = update.effective_user.id
-    lang = context.args[0] if context.args else "python"
-    reply = await call_gemini(f"Standard .gitignore for {lang}. Return only contents.", uid)
-    await update.message.reply_text(f"<pre>{reply[:3800]}</pre>", parse_mode=ParseMode.HTML)
-
-
-async def json_cmd(update, context):
-    r = update.message.reply_to_message
-    text = r.text if r and r.text else " ".join(context.args)
-    if not text:
-        await update.message.reply_text("📋 Provide JSON."); return
-    try:
-        pretty = json.dumps(json.loads(text), indent=2, ensure_ascii=False)
-        await update.message.reply_text(f"<pre>{pretty[:3800]}</pre>", parse_mode=ParseMode.HTML)
-    except Exception as e:
-        await update.message.reply_text(f"❌ {e}")
-
-
-async def b64_cmd(update, context):
-    if len(context.args) < 2:
-        await update.message.reply_text("🔡 /b64 encode text"); return
-    mode, text = context.args[0].lower(), " ".join(context.args[1:])
-    try:
-        out = base64.b64encode(text.encode()).decode() if mode == "encode" else base64.b64decode(text.encode()).decode()
-        await update.message.reply_text(f"<code>{out}</code>", parse_mode=ParseMode.HTML)
-    except Exception as e:
-        await update.message.reply_text(f"❌ {e}")
-
-
-async def hash_cmd(update, context):
-    text = " ".join(context.args)
-    r = update.message.reply_to_message
-    if r and r.text: text = r.text
-    if not text:
-        await update.message.reply_text("🔒 /hash text"); return
-    await update.message.reply_text(
-        f"SHA256: <code>{hashlib.sha256(text.encode()).hexdigest()}</code>\n"
-        f"MD5: <code>{hashlib.md5(text.encode()).hexdigest()}</code>",
-        parse_mode=ParseMode.HTML)
-
-
-async def cron_cmd(update, context):
-    expr = " ".join(context.args)
-    if not expr:
-        await update.message.reply_text('⏰ /cron "0 0 * * *"'); return
-    reply = await call_gemini(f"Explain cron expression: {expr}", update.effective_user.id)
-    await update.message.reply_text(reply)
-
-
-async def jwt_cmd(update, context):
-    token = " ".join(context.args)
-    if not token:
-        await update.message.reply_text("🔑 /jwt <token>"); return
-    try:
-        parts = token.split(".")
-        if len(parts) != 3:
-            await update.message.reply_text("❌ Invalid JWT."); return
-        def d(x):
-            x += "=" * (-len(x) % 4)
-            return base64.urlsafe_b64decode(x).decode()
-        await update.message.reply_text(
-            f"🔑 <b>Header</b>\n<pre>{d(parts[0])}</pre>\n\n<b>Payload</b>\n<pre>{d(parts[1])}</pre>",
-            parse_mode=ParseMode.HTML)
-    except Exception as e:
-        await update.message.reply_text(f"❌ {e}")
-
-
-async def urlenc_cmd(update, context):
-    if len(context.args) < 2:
-        await update.message.reply_text("🔗 /urlenc encode text"); return
-    mode, text = context.args[0].lower(), " ".join(context.args[1:])
-    out = urllib.parse.quote(text) if mode == "encode" else urllib.parse.unquote(text)
-    await update.message.reply_text(f"<code>{out}</code>", parse_mode=ParseMode.HTML)
-
-
-# ============================================================
-#  MODULE G — PERSONAL
+#  PERSONAL (owner)
 # ============================================================
 @owner_only
 async def diary_cmd(update, context):
@@ -1610,8 +1337,7 @@ async def habit_cmd(update, context):
         lines = ["🎯 <b>Habits</b>", ""]
         for name, d in habits.items():
             lines.append(f"  • {name}: 🔥 {d.get('streak',0)}")
-        await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML); return
-    sub = context.args[0].lower()
+        await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML); return    sub = context.args[0].lower()
     if sub == "add":
         name = " ".join(context.args[1:])
         if name: habits[name] = {"streak": 0, "last": ""}; save_userdata()
@@ -1644,153 +1370,165 @@ async def money_cmd(update, context):
 
 
 # ============================================================
-#  MODULE H — ANALYTICS
+#  DEV TOOLS
 # ============================================================
-@owner_only
-async def monitor_cmd(update, context):
-    if not context.args or context.args[0].lower() == "list":
-        if not MONITORS:
-            await update.message.reply_text("📡 /monitor add URL | list | del N"); return
-        lines = ["📡 <b>Monitors</b>", ""]
-        for i, m in enumerate(MONITORS, 1):
-            lines.append(f"  {i}. {m['url']} (last: {m.get('last_status','—')})")
-        await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML); return
-    sub = context.args[0].lower()
-    if sub == "add":
-        url = context.args[1] if len(context.args) > 1 else ""
-        if not url.startswith("http"): url = "https://" + url
-        MONITORS.append({"uid": OWNER_ID, "chat_id": update.effective_chat.id, "url": url, "last_status": None})
-        save_monitors(); await update.message.reply_text(f"📡 {url}")
-    elif sub == "del":
-        try: MONITORS.pop(int(context.args[1])-1); save_monitors(); await update.message.reply_text("🗑")
-        except: pass
+async def diff_cmd(update, context):   await _text_ai(update, context, "Explain this git diff in plain language.")
+async def commit_cmd(update, context): await _text_ai(update, context, "Generate Conventional Commit message for this diff.")
 
 
-async def rss_cmd(update, context):
+async def dockerfile_cmd(update, context):
     uid = update.effective_user.id
-    if not context.args or context.args[0].lower() == "list":
-        if not RSS_FEEDS:
-            await update.message.reply_text("📰 /rss add URL | list | del N"); return
-        lines = ["📰 <b>RSS</b>", ""]
-        for i, f in enumerate(RSS_FEEDS, 1):
-            lines.append(f"  {i}. {f['url']}")
-        await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML); return
-    sub = context.args[0].lower()
-    if sub == "add":
-        url = context.args[1] if len(context.args) > 1 else ""
-        if not url.startswith("http"): url = "https://" + url
-        RSS_FEEDS.append({"uid": uid, "chat_id": update.effective_chat.id, "url": url, "last_hash": ""})
-        save_rss(); await update.message.reply_text(f"📰 {url}")
-    elif sub == "del":
-        try: RSS_FEEDS.pop(int(context.args[1])-1); save_rss(); await update.message.reply_text("🗑")
-        except: pass
+    topic = " ".join(context.args) or "python app"
+    reply = await call_gemini(f"Multi-stage Dockerfile for: {topic}. Return only Dockerfile.", uid)
+    await update.message.reply_text(f"<pre>{reply[:3800]}</pre>", parse_mode=ParseMode.HTML)
 
 
-# ============================================================
-#  MODULE I — FUN
-# ============================================================
-async def gif_cmd(update, context):
-    q = " ".join(context.args) or "cat"
+async def gitignore_cmd(update, context):
+    uid = update.effective_user.id
+    lang = context.args[0] if context.args else "python"
+    reply = await call_gemini(f"Standard .gitignore for {lang}. Return only contents.", uid)
+    await update.message.reply_text(f"<pre>{reply[:3800]}</pre>", parse_mode=ParseMode.HTML)
+
+
+async def json_cmd(update, context):
+    r = update.message.reply_to_message
+    text = r.text if r and r.text else " ".join(context.args)
+    if not text:
+        await update.message.reply_text("📋 Provide JSON."); return
     try:
-        r = requests.get(f"https://g.tenor.com/v1/search?q={urllib.parse.quote(q)}&key=LIVDSRZULELA&limit=1", timeout=15)
-        data = r.json()
-        if data.get("results"):
-            gif_url = data["results"][0]["media"][0]["gif"]["url"]
-            await update.message.reply_animation(animation=gif_url)
-        else:
-            await update.message.reply_text("❌ Not found.")
+        pretty = json.dumps(json.loads(text), indent=2, ensure_ascii=False)
+        await update.message.reply_text(f"<pre>{pretty[:3800]}</pre>", parse_mode=ParseMode.HTML)
     except Exception as e:
-        await update.message.reply_text(f"⚠️ {e}")
+        await update.message.reply_text(f"❌ {e}")
 
 
-async def meme_cmd(update, context):
+async def b64_cmd(update, context):
+    if len(context.args) < 2:
+        await update.message.reply_text("🔡 /b64 encode text"); return
+    mode, text = context.args[0].lower(), " ".join(context.args[1:])
     try:
-        r = requests.get("https://meme-api.com/gimme", timeout=15)
-        data = r.json()
-        await update.message.reply_photo(photo=data["url"], caption=data.get("title", ""))
+        out = base64.b64encode(text.encode()).decode() if mode == "encode" else base64.b64decode(text.encode()).decode()
+        await update.message.reply_text(f"<code>{out}</code>", parse_mode=ParseMode.HTML)
     except Exception as e:
-        await update.message.reply_text(f"⚠️ {e}")
+        await update.message.reply_text(f"❌ {e}")
 
 
-async def horoscope_cmd(update, context):
-    uid = update.effective_user.id
-    sign = context.args[0] if context.args else "aries"
-    reply = await call_gemini(f"Short daily horoscope for {sign} (3-4 sentences).", uid)
-    await update.message.reply_text(f"🔮 <b>{sign.title()}</b>\n\n{reply}", parse_mode=ParseMode.HTML)
+async def hash_cmd(update, context):
+    text = " ".join(context.args)
+    r = update.message.reply_to_message
+    if r and r.text: text = r.text
+    if not text:
+        await update.message.reply_text("🔒 /hash text"); return
+    await update.message.reply_text(
+        f"SHA256: <code>{hashlib.sha256(text.encode()).hexdigest()}</code>\n"
+        f"MD5: <code>{hashlib.md5(text.encode()).hexdigest()}</code>",
+        parse_mode=ParseMode.HTML)
 
 
-async def recipe_cmd(update, context):
-    uid = update.effective_user.id
-    q = " ".join(context.args)
-    if not q:
-        await update.message.reply_text("🍳 /recipe pasta"); return
-    reply = await call_gemini(f"Recipe for {q}: ingredients + steps.", uid)
+async def cron_cmd(update, context):
+    expr = " ".join(context.args)
+    if not expr:
+        await update.message.reply_text('⏰ /cron "0 0 * * *"'); return
+    reply = await call_gemini(f"Explain cron expression: {expr}", update.effective_user.id)
     await update.message.reply_text(reply)
 
 
 # ============================================================
-#  PHASE 3 — ADMIN
+#  ADMIN
 # ============================================================
-async def _do_ban(context, uid, reason, actor):
-    if uid not in state["BANNED"]: state["BANNED"].append(uid)
-    if uid in state["WHITELIST"]: state["WHITELIST"].remove(uid)
-    save_state()
-    log_mod_action(actor, uid, "BAN", reason)
-    try:
-        await context.bot.send_message(OWNER_ID, t(OWNER_ID, "ban_alert", uid=uid, reason=reason), parse_mode=ParseMode.HTML)
-    except: pass
+def admin_kb():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📊 Система", callback_data="adm_status"),
+         InlineKeyboardButton("👥 Whitelist", callback_data="adm_wl")],
+        [InlineKeyboardButton("🚫 Модерация", callback_data="adm_mod"),
+         InlineKeyboardButton("📢 Рассылка", callback_data="adm_broadcast")],
+        [InlineKeyboardButton("📊 Логи", callback_data="adm_logs"),
+         InlineKeyboardButton("💾 Бэкап", callback_data="adm_backup")],
+        [InlineKeyboardButton("🔒 Режимы", callback_data="adm_modes"),
+         InlineKeyboardButton("📈 Статистика", callback_data="adm_stats")],
+    ])
 
 
 @owner_only
 async def admin_panel(update, context):
+    await update.message.reply_text("🛡 <b>J.A.R.V.I.S. — Панель управления</b>\n\nВыбери раздел:",
+        reply_markup=admin_kb(), parse_mode=ParseMode.HTML)
+
+
+async def on_admin_callback(update, context):
+    q = update.callback_query
+    await q.answer()
     uid = update.effective_user.id
-    lang = LANG.get(str(uid), "en")
-    kb = [
-        [KeyboardButton("👥 Белый список" if lang == "ru" else "👥 Whitelist"),
-         KeyboardButton("🚫 Баны" if lang == "ru" else "🚫 Bans")],
-        [KeyboardButton("📊 Логи" if lang == "ru" else "📊 Logs"),
-         KeyboardButton("📢 Рассылка" if lang == "ru" else "📢 Broadcast")],
-        [KeyboardButton("💾 Бэкап" if lang == "ru" else "💾 Backup"),
-         KeyboardButton("ℹ️ Статус" if lang == "ru" else "ℹ️ Status")],
-    ]
-    await update.message.reply_text(t(uid, "admin_panel"),
-        reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True), parse_mode=ParseMode.HTML)
+    if uid != OWNER_ID: return
 
+    data = q.data
+    if data == "adm_status":
+        try:
+            cpu = psutil.cpu_percent(interval=0.3)
+            ram = psutil.virtual_memory().percent
+            dsk = psutil.disk_usage("/").percent
+            up = int(time.time() - STARTED_AT)
+            h, m, s = up // 3600, (up % 3600) // 60, up % 60
+            txt = (f"📊 <b>Система</b>\n\n  CPU  │ {cpu}%\n  RAM  │ {ram}%\n  Disk │ {dsk}%\n"
+                   f"  Uptime │ {h}h {m}m {s}s\n"
+                   f"  Upstash │ {'✅' if redis_client else '❌'}\n"
+                   f"  Cloudflare │ {'✅' if CF_ACCOUNT_ID else '❌'}\n"
+                   f"  Currents │ {'✅' if CURRENTS_KEY else '❌'}")
+        except Exception as e:
+            txt = f"⚠️ {e}"
+        await q.edit_message_text(txt, reply_markup=admin_kb(), parse_mode=ParseMode.HTML)
 
-@owner_only
-async def admin_buttons(update, context):
-    txt = update.message.text
-    if   txt in ("👥 Whitelist", "👥 Белый список"): await whitelist_list(update, context)
-    elif txt in ("🚫 Bans", "🚫 Баны"):               await _show_bans(update, context)
-    elif txt in ("📊 Logs", "📊 Логи"):               await logs_cmd(update, context)
-    elif txt in ("📢 Broadcast", "📢 Рассылка"):      await update.message.reply_text(t(update.effective_user.id, "use_broadcast"))
-    elif txt in ("💾 Backup", "💾 Бэкап"):            await backup_cmd(update, context)
-    elif txt in ("ℹ️ Status", "ℹ️ Статус"):          await health_cmd(update, context)
+    elif data == "adm_wl":
+        lines = ["👥 <b>Whitelist</b>", ""]
+        for w in state["WHITELIST"][:30]:
+            lines.append(f"  • <code>{w}</code>")
+        lines.append("")
+        lines.append("/add <id> | /remove <id>")
+        await q.edit_message_text("\n".join(lines), reply_markup=admin_kb(), parse_mode=ParseMode.HTML)
 
+    elif data == "adm_mod":
+        txt = (f"🚫 <b>Модерация</b>\n\nЗабанено: {len(state['BANNED'])}\n"
+               f"В муте: {len(state['MUTED'])}\n"
+               f"Варнов: {sum(len(w) for w in state['WARNINGS'].values())}\n\n"
+               f"/ban /unban /mute /warn /warnings /intruders /prune")
+        await q.edit_message_text(txt, reply_markup=admin_kb(), parse_mode=ParseMode.HTML)
 
-async def _show_bans(update, context):
-    uid = update.effective_user.id
-    if not state["BANNED"]:
-        await update.message.reply_text(t(uid, "banned_empty")); return
-    lines = [t(uid, "banned_header"), ""]
-    for b in state["BANNED"]:
-        lines.append(f"  • <code>{b}</code>")
-    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+    elif data == "adm_broadcast":
+        await q.edit_message_text("📢 Используйте: /broadcast <текст>", reply_markup=admin_kb())
+
+    elif data == "adm_logs":
+        if os.path.exists("bot.log"):
+            with open("bot.log", "r", encoding="utf-8") as f:
+                tail = "".join(f.readlines()[-20:])[-3000:]
+            await q.edit_message_text(f"📊 <b>Логи</b>\n\n<pre>{tail}</pre>",
+                reply_markup=admin_kb(), parse_mode=ParseMode.HTML)
+        else:
+            await q.edit_message_text("📊 Логи пусты", reply_markup=admin_kb())
+
+    elif data == "adm_backup":
+        await q.edit_message_text("💾 Используйте: /backup", reply_markup=admin_kb())
+
+    elif data == "adm_modes":
+        txt = f"🔒 <b>Режимы</b>\n\nSilent: {'✅' if SILENT_MODE else '❌'}\nLockdown: {'✅' if LOCKDOWN else '❌'}\n\n/silent on|off | /lockdown on|off"
+        await q.edit_message_text(txt, reply_markup=admin_kb(), parse_mode=ParseMode.HTML)
+
+    elif data == "adm_stats":
+        top = sorted(USER_STATS.items(), key=lambda kv: kv[1].get("messages", 0), reverse=True)[:10]
+        lines = ["📈 <b>Топ пользователей</b>", ""]
+        for u, s in top:
+            lines.append(f"  <code>{u}</code> — {s.get('messages',0)} msgs")
+        await q.edit_message_text("\n".join(lines) or "📈 Пусто",
+            reply_markup=admin_kb(), parse_mode=ParseMode.HTML)
 
 
 @owner_only
 async def add_whitelist(update, context):
-    if not context.args:
-        await update.message.reply_text("👥 /add <id> [duration|perm]"); return
+    if not context.args: return
     try: uid = int(context.args[0])
     except: return
     if uid not in state["WHITELIST"]: state["WHITELIST"].append(uid)
-    if len(context.args) >= 2:
-        d = parse_duration(context.args[1])
-        if d and d != "perm":
-            state["WHITELIST_EXPIRY"][str(uid)] = (datetime.now() + d).isoformat()
     save_state()
-    await update.message.reply_text(t(OWNER_ID, "user_added", uid=uid), parse_mode=ParseMode.HTML)
+    await update.message.reply_text(f"✅ {uid} добавлен.")
 
 
 @owner_only
@@ -1799,92 +1537,86 @@ async def remove_whitelist(update, context):
     try: uid = int(context.args[0])
     except: return
     if uid in state["WHITELIST"]: state["WHITELIST"].remove(uid)
-    state["WHITELIST_EXPIRY"].pop(str(uid), None); save_state()
-    await update.message.reply_text(t(OWNER_ID, "access_revoked", uid=uid), parse_mode=ParseMode.HTML)
+    save_state()
+    await update.message.reply_text(f"🗑 {uid} удалён.")
 
 
 @owner_only
 async def whitelist_list(update, context):
-    uid = update.effective_user.id
-    if not state["WHITELIST"]:
-        await update.message.reply_text(t(uid, "wl_empty")); return
-    lines = [t(uid, "wl_header"), ""]
+    lines = ["👥 <b>Whitelist</b>", ""]
     for w in state["WHITELIST"]:
-        exp = state["WHITELIST_EXPIRY"].get(str(w), "∞")
-        lines.append(f"  • <code>{w}</code>  ·  {exp}")
+        lines.append(f"  • <code>{w}</code>")
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
 async def ban_user(update, context):
-    if update.effective_chat.type == "private" and update.effective_user.id != OWNER_ID: return
-    if not await check_group_permissions(update, context): return
+    if update.effective_user.id != OWNER_ID: return
     if not context.args: return
     try: uid = int(context.args[0])
     except: return
-    rest = context.args[1:]; duration = None
-    if rest:
-        d = parse_duration(rest[0])
-        if d: duration, rest = d, rest[1:]
-    reason = " ".join(rest) or "no reason"
-    await _do_ban(context, uid, reason, update.effective_user.id)
-    if duration and duration != "perm":
-        state["BANNED_TIMED"][str(uid)] = (datetime.now() + duration).isoformat()
-    else: state["BANNED_TIMED"].pop(str(uid), None)
+    if uid not in state["BANNED"]: state["BANNED"].append(uid)
+    if uid in state["WHITELIST"]: state["WHITELIST"].remove(uid)
     save_state()
-    ts = "forever" if not duration or duration == "perm" else f"for {duration}"
-    await update.message.reply_text(t(OWNER_ID, "user_banned", uid=uid, ts=ts, reason=reason), parse_mode=ParseMode.HTML)
+    await update.message.reply_text(f"🚫 {uid} бан.")
 
 
 async def unban_user(update, context):
-    if update.effective_chat.type == "private" and update.effective_user.id != OWNER_ID: return
-    if not await check_group_permissions(update, context): return
+    if update.effective_user.id != OWNER_ID: return
     if not context.args: return
     try: uid = int(context.args[0])
     except: return
     if uid in state["BANNED"]: state["BANNED"].remove(uid)
-    state["BANNED_TIMED"].pop(str(uid), None); save_state()
-    await update.message.reply_text(t(OWNER_ID, "user_unbanned", uid=uid), parse_mode=ParseMode.HTML)
+    save_state()
+    await update.message.reply_text(f"✅ {uid} разбан.")
 
 
+@owner_only
 async def mute_user(update, context):
-    if update.effective_chat.type == "private" and update.effective_user.id != OWNER_ID: return
-    if not await check_group_permissions(update, context): return
-    if len(context.args) < 2: return
+    if len(context.args) < 2:
+        await update.message.reply_text("🔇 /mute <id> <2h|perm>"); return
     try: uid = int(context.args[0])
     except: return
-    d = parse_duration(context.args[1])
-    if not d: return
-    exp = datetime.now() + (timedelta(days=36500) if d == "perm" else d)
-    state["MUTED"][str(uid)] = exp.isoformat(); save_state()
-    await update.message.reply_text(t(OWNER_ID, "user_muted", uid=uid, until=exp.strftime("%Y-%m-%d %H:%M")), parse_mode=ParseMode.HTML)
+    d = context.args[1]
+    if d == "perm":
+        exp = datetime.now() + timedelta(days=36500)
+    else:
+        m = re.match(r"^(\d+)([hmd])$", d.lower())
+        if not m: return
+        v, u = int(m.group(1)), m.group(2)
+        delta = {"h": timedelta(hours=v), "d": timedelta(days=v), "m": timedelta(minutes=v)}[u]
+        exp = datetime.now() + delta
+    state["MUTED"][str(uid)] = exp.isoformat()
+    save_state()
+    await update.message.reply_text(f"🔇 {uid} до {exp.strftime('%H:%M')}")
 
 
+@owner_only
 async def warn_user(update, context):
-    if update.effective_chat.type == "private" and update.effective_user.id != OWNER_ID: return
-    if not await check_group_permissions(update, context): return
     if len(context.args) < 2: return
     try: uid = int(context.args[0])
     except: return
     reason = " ".join(context.args[1:])
     wl = state["WARNINGS"].setdefault(str(uid), [])
-    wl.append({"reason": reason, "by": update.effective_user.id, "at": datetime.now().isoformat()})
+    wl.append({"reason": reason, "at": datetime.now().isoformat()})
     save_state()
-    await update.message.reply_text(t(OWNER_ID, "user_warned", uid=uid, count=len(wl), reason=reason), parse_mode=ParseMode.HTML)
+    await update.message.reply_text(f"⚠️ Варн {len(wl)}/3: {uid}. {reason}")
     if len(wl) >= 3:
-        await _do_ban(context, uid, "auto-ban", update.effective_user.id)
-        await update.message.reply_text(t(OWNER_ID, "auto_banned", uid=uid), parse_mode=ParseMode.HTML)
+        if uid not in state["BANNED"]: state["BANNED"].append(uid)
+        save_state()
+        await update.message.reply_text(f"🚨 Авто-бан: {uid}")
 
 
+@owner_only
 async def warnings_list(update, context):
     if not context.args: return
     uid = str(context.args[0])
     warns = state["WARNINGS"].get(uid, [])
     if not warns:
-        await update.message.reply_text(t(OWNER_ID, "no_warnings")); return
-    lines = [t(OWNER_ID, "warns_header", uid=uid), ""]
+        await update.message.reply_text("✅ Нет."); return
+    lines = [f"⚠️ Варны {uid}:", ""]
     for i, w in enumerate(warns, 1):
-        lines.append(f"  {i}. {w['at'][:16]} │ {w['reason']}")
-    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+        lines.append(f"  {i}. {w['at'][:16]} — {w['reason']}")
+    await update.message.reply_text("\n".join(lines))
 
 
 @owner_only
@@ -1894,29 +1626,17 @@ async def broadcast_msg(update, context):
     sent = failed = 0
     for u in state["WHITELIST"]:
         try:
-            await context.bot.send_message(u, f"📢 <b>Broadcast</b>\n\n{text}", parse_mode=ParseMode.HTML); sent += 1
+            await context.bot.send_message(u, f"📢 <b>Broadcast</b>\n\n{text}", parse_mode=ParseMode.HTML)
+            sent += 1
         except: failed += 1
-    await update.message.reply_text(t(OWNER_ID, "broadcast_done", sent=sent, failed=failed), parse_mode=ParseMode.HTML)
-
-
-@owner_only
-async def send_direct(update, context):
-    if len(context.args) < 2: return
-    try: uid = int(context.args[0])
-    except: return
-    text = " ".join(context.args[1:])
-    try:
-        await context.bot.send_message(uid, text)
-        await update.message.reply_text(t(OWNER_ID, "msg_delivered"))
-    except Exception as e:
-        await update.message.reply_text(f"⚠️ {e}")
+    await update.message.reply_text(f"📢 {sent}/{failed}")
 
 
 @owner_only
 async def backup_cmd(update, context):
     zip_name = "jarvis_backup.zip"
     with zipfile.ZipFile(zip_name, "w") as z:
-        for f in ("main.py", "requirements.txt", "whitelist.json", "config.json", "tickets.json", "usage_stats.json"):
+        for f in ("main.py", "requirements.txt", "whitelist.json", "config.json"):
             if os.path.exists(f): z.write(f)
     await update.message.reply_document(document=open(zip_name, "rb"), filename=zip_name)
     os.remove(zip_name)
@@ -1924,101 +1644,51 @@ async def backup_cmd(update, context):
 
 @owner_only
 async def logs_cmd(update, context):
-    if not os.path.exists("bot.log"): return
-    with open("bot.log", "r", encoding="utf-8") as f:
-        tail = "".join(f.readlines()[-35:])[-4000:]
-    await update.message.reply_text(f"{t(OWNER_ID, 'logs_header')}\n\n<pre>{tail}</pre>", parse_mode=ParseMode.HTML)
-
-
-@owner_only
-async def export_logs_cmd(update, context):
     if os.path.exists("bot.log"):
-        await update.message.reply_document(document=open("bot.log", "rb"))
-
-
-# ============================================================
-#  PHASE 4 — ADVANCED AI
-# ============================================================
-async def _ai(update, context, instruction, need_reply=False):
-    uid = update.effective_user.id
-    if need_reply:
-        r = update.message.reply_to_message
-        if not r or not (r.text or r.caption):
-            await update.message.reply_text(t(uid, "no_reply")); return
-        text = r.text or r.caption
-    else:
-        text = " ".join(context.args)
-    if not text and not need_reply:
-        await update.message.reply_text("✏️ Provide arguments."); return
-    status = await update.message.reply_text(t(uid, "processing"), parse_mode=ParseMode.HTML)
-    try:
-        reply = await call_gemini(f"{instruction}\n\nINPUT:\n{text}", uid)
-        try: await status.edit_text(reply[:4000], parse_mode=ParseMode.MARKDOWN)
-        except: await status.edit_text(reply[:4000])
-        for i in range(4000, len(reply), 4000):
-            await update.message.reply_text(reply[i:i+4000])
-    except Exception as e:
-        logger.exception(f"AI: {e}"); await status.edit_text(t(uid, "req_error"))
-
-
-async def review_cmd(update, context):    await _ai(update, context, "Review this code: bugs, security, style. Suggest fixes.", need_reply=True)
-async def regex_cmd(update, context):     await _ai(update, context, "Generate regex for the described task. Return only pattern + test example.")
-async def sql_cmd(update, context):       await _ai(update, context, "Write SQL for the task. Add one-line explanation.")
-async def explain_cmd(update, context):   await _ai(update, context, "Explain this code line by line.", need_reply=True)
-async def refactor_cmd(update, context):  await _ai(update, context, "Refactor this code. Return optimized version + change list.", need_reply=True)
-async def uml_cmd(update, context):       await _ai(update, context, "Return a PlantUML diagram for the described code.")
-async def pytest_cmd(update, context):    await _ai(update, context, "Generate pytest file for this code. Return only Python.", need_reply=True)
-async def doc_cmd(update, context):       await _ai(update, context, "Add PEP-8 docstrings and comments. Preserve logic.", need_reply=True)
-async def cv_cmd(update, context):        await _ai(update, context, "Structure raw bio into Markdown CV: Summary, Experience, Skills, Education.")
-
-
-async def translate_long_cmd(update, context):
-    if len(context.args) < 2:
-        await update.message.reply_text("🌐 /translate_long <lang> <text>"); return
-    lang, text = context.args[0], " ".join(context.args[1:])
-    await _ai(update, context, f"Translate to {lang}. Preserve formatting.\n---\n{text}")
-
-
-async def ask_cmd(update, context):
-    uid = update.effective_user.id
-    r = update.message.reply_to_message
-    if not r or not r.text:
-        await update.message.reply_text(t(uid, "no_reply")); return
-    q = " ".join(context.args)
-    doc = r.text[:30000]
-    status = await update.message.reply_text(t(uid, "processing"), parse_mode=ParseMode.HTML)
-    try:
-        reply = await call_gemini(f"Answer based ONLY on this document.\n\n{doc}\n\nQ: {q}", uid)
-        await status.edit_text(reply[:4000])
-    except Exception as e:
-        logger.exception(f"Ask: {e}"); await status.edit_text(t(uid, "req_error"))
-
-
-# ============================================================
-#  PHASE 5 — SPECIAL
-# ============================================================
-@owner_only
-async def export_whitelist_cmd(update, context):
-    _atomic_write_json("whitelist_export.json", {
-        "whitelist": state["WHITELIST"], "expiry": state["WHITELIST_EXPIRY"],
-        "exported_at": datetime.now().isoformat(),
-    })
-    await update.message.reply_document(document=open("whitelist_export.json", "rb"))
-    os.remove("whitelist_export.json")
+        with open("bot.log", "r", encoding="utf-8") as f:
+            tail = "".join(f.readlines()[-35:])[-4000:]
+        await update.message.reply_text(f"<pre>{tail}</pre>", parse_mode=ParseMode.HTML)
 
 
 @owner_only
-async def clear_session_cmd(update, context):
-    USER_HISTORY.clear(); USER_MODES.clear(); USER_VIBES.clear()
-    INCOGNITO_USERS.clear(); LAST_REQUEST.clear()
-    if redis_client:
-        try:
-            keys = redis_client.keys("jarvis:hist:*")
-            for k in keys or []:
-                redis_client.delete(k)
-        except Exception:
-            pass
-    await update.message.reply_text(t(OWNER_ID, "session_purged"))
+async def silent_cmd(update, context):
+    global SILENT_MODE
+    if not context.args:
+        await update.message.reply_text(f"🤫 {'ON' if SILENT_MODE else 'OFF'}"); return
+    SILENT_MODE = context.args[0].lower() == "on"
+    await update.message.reply_text(f"🤫 Silent {'ON' if SILENT_MODE else 'OFF'}")
+
+
+@owner_only
+async def lockdown_cmd(update, context):
+    global LOCKDOWN
+    if not context.args:
+        await update.message.reply_text(f"🔒 {'ON' if LOCKDOWN else 'OFF'}"); return
+    LOCKDOWN = context.args[0].lower() == "on"
+    await update.message.reply_text(f"🔒 Lockdown {'ON' if LOCKDOWN else 'OFF'}")
+
+
+@owner_only
+async def stats_cmd(update, context):
+    top = sorted(USER_STATS.items(), key=lambda kv: kv[1].get("messages", 0), reverse=True)[:10]
+    lines = ["📈 <b>Топ</b>", ""]
+    for u, s in top:
+        lines.append(f"  <code>{u}</code> — {s.get('messages',0)} msgs")
+    await update.message.reply_text("\n".join(lines) or "📈 Пусто", parse_mode=ParseMode.HTML)
+
+
+@owner_only
+async def health_cmd(update, context):
+    try:
+        cpu = psutil.cpu_percent(interval=0.5); ram = psutil.virtual_memory().percent
+        dsk = psutil.disk_usage("/").percent
+        up = int(time.time() - STARTED_AT)
+        h, m, s = up // 3600, (up % 3600) // 60, up % 60
+        await update.message.reply_text(
+            f"💻 <b>Health</b>\n\n  CPU │ {cpu}%\n  RAM │ {ram}%\n  Disk │ {dsk}%\n  Uptime │ {h}h {m}m {s}s",
+            parse_mode=ParseMode.HTML)
+    except Exception as e:
+        await update.message.reply_text(f"⚠️ {e}")
 
 
 async def report_cmd(update, context):
@@ -2026,12 +1696,13 @@ async def report_cmd(update, context):
     text = " ".join(context.args)
     if not text:
         await update.message.reply_text("📩 /report <issue>"); return
-    ticket = {"id": len(TICKETS) + 1, "user_id": uid, "username": update.effective_user.username,
-              "text": text, "status": "open", "at": datetime.now().isoformat()}
+    ticket = {"id": len(TICKETS) + 1, "user_id": uid, "text": text, "status": "open",
+              "at": datetime.now().isoformat()}
     TICKETS.append(ticket); save_tickets()
-    await update.message.reply_text(t(uid, "report_created", tid=ticket["id"]), parse_mode=ParseMode.HTML)
+    await update.message.reply_text(f"✅ Тикет #{ticket['id']}")
     try:
-        await context.bot.send_message(OWNER_ID, f"📩 Ticket #{ticket['id']} from <code>{uid}</code>: {text}", parse_mode=ParseMode.HTML)
+        await context.bot.send_message(OWNER_ID, f"📩 #{ticket['id']} от <code>{uid}</code>: {text}",
+            parse_mode=ParseMode.HTML)
     except: pass
 
 
@@ -2039,10 +1710,10 @@ async def report_cmd(update, context):
 async def tickets_cmd(update, context):
     opens = [x for x in TICKETS if x.get("status") == "open"]
     if not opens:
-        await update.message.reply_text(t(OWNER_ID, "tickets_empty")); return
-    lines = [t(OWNER_ID, "tickets_header"), ""]
+        await update.message.reply_text("📭 Нет тикетов."); return
+    lines = ["📋 <b>Тикеты</b>", ""]
     for x in opens[:20]:
-        lines.append(f"  #{x['id']}  │  <code>{x['user_id']}</code>  │  {x['text'][:60]}")
+        lines.append(f"  #{x['id']} │ <code>{x['user_id']}</code> │ {x['text'][:60]}")
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
@@ -2054,271 +1725,168 @@ async def close_ticket_cmd(update, context):
     for x in TICKETS:
         if x["id"] == tid:
             x["status"] = "closed"; save_tickets()
-            await update.message.reply_text(t(OWNER_ID, "ticket_closed", tid=tid)); return
-    await update.message.reply_text(t(OWNER_ID, "ticket_not_found"))
+            await update.message.reply_text(f"✅ Тикет {tid} закрыт."); return
 
 
 @owner_only
-async def stats_cmd(update, context):
-    top = sorted(USER_STATS.items(), key=lambda kv: kv[1].get("messages", 0), reverse=True)[:10]
-    if not top:
-        await update.message.reply_text(t(OWNER_ID, "stats_empty")); return
-    lines = [t(OWNER_ID, "stats_header"), ""]
-    for uid, s in top:
-        lines.append(f"  <code>{uid}</code>  ·  {s.get('messages',0)} msgs  ·  {s.get('commands',0)} cmds")
-    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+async def intruders_cmd(update, context):
+    if not os.path.exists(INTRUDER_FILE):
+        await update.message.reply_text("📭 Пусто."); return
+    with open(INTRUDER_FILE) as f:
+        try: data = json.load(f)
+        except: data = []
+    if not data:
+        await update.message.reply_text("📭 Пусто."); return
+    lines = ["🚨 <b>Нарушители</b>", ""]
+    seen = set()
+    for x in data[-30:]:
+        u = x.get("user_id")
+        if u in seen: continue
+        seen.add(u)
+        lines.append(f"  <code>{u}</code> @{x.get('username','—')}")
+    await update.message.reply_text("\n".join(lines[:30]), parse_mode=ParseMode.HTML)
 
 
 @owner_only
-async def health_cmd(update, context):
-    try:
-        cpu = psutil.cpu_percent(interval=0.5); ram = psutil.virtual_memory().percent
-        dsk = psutil.disk_usage("/").percent
-        up = int(time.time() - STARTED_AT)
-        h, m, s = up // 3600, (up % 3600) // 60, up % 60
-        await update.message.reply_text(
-            f"{t(OWNER_ID, 'health_header')}\n\n  CPU │ {cpu}%\n  RAM │ {ram}%\n  Disk │ {dsk}%\n  Uptime │ {h}h {m}m {s}s",
-            parse_mode=ParseMode.HTML)
-    except Exception as e:
-        logger.exception(f"Health: {e}"); await update.message.reply_text(t(OWNER_ID, "health_fail"))
+async def prune_cmd(update, context):
+    if not context.args:
+        await update.message.reply_text("🪓 /prune 30d"); return
+    m = re.match(r"^(\d+)([dh])$", context.args[0].lower())
+    if not m: return
+    v, u = int(m.group(1)), m.group(2)
+    delta = timedelta(hours=v) if u == "h" else timedelta(days=v)
+    thr = datetime.now() - delta
+    removed = 0
+    for suid, s in list(USER_STATS.items()):
+        last = s.get("last_seen")
+        if last and datetime.fromisoformat(last) < thr:
+            try: state["WHITELIST"].remove(int(suid)); removed += 1
+            except: pass
+    save_state()
+    await update.message.reply_text(f"🪓 Удалено: {removed}")
+
+
+@owner_only
+async def export_whitelist_cmd(update, context):
+    _write_json("whitelist_export.json", {"whitelist": state["WHITELIST"],
+        "exported_at": datetime.now().isoformat()})
+    await update.message.reply_document(document=open("whitelist_export.json", "rb"))
+    os.remove("whitelist_export.json")
+
+
+@owner_only
+async def clear_session_cmd(update, context):
+    USER_HISTORY.clear(); USER_MODES.clear(); USER_VIBES.clear()
+    INCOGNITO.clear(); LAST_REQUEST.clear()
+    if redis_client:
+        try:
+            keys = redis_client.keys("jarvis:hist:*")
+            for k in keys or []: redis_client.delete(k)
+        except: pass
+    await update.message.reply_text("🧹 Сессия очищена.")
 
 
 @owner_only
 async def stopwords_cmd(update, context):
     if not context.args:
-        await update.message.reply_text(t(OWNER_ID, "stopwords_list", words=", ".join(STOP_WORDS))); return
+        await update.message.reply_text("🛑 " + ", ".join(STOP_WORDS)); return
     action = context.args[0].lower()
     if action == "add" and len(context.args) > 1:
-        STOP_WORDS.append(" ".join(context.args[1:])); await update.message.reply_text(t(OWNER_ID, "stopword_added"))
+        STOP_WORDS.append(" ".join(context.args[1:])); await update.message.reply_text("✅")
     elif action == "remove" and len(context.args) > 1:
         w = " ".join(context.args[1:])
         if w in STOP_WORDS: STOP_WORDS.remove(w)
-        await update.message.reply_text(t(OWNER_ID, "stopword_removed"))
+        await update.message.reply_text("🗑")
 
 
 # ============================================================
-#  BACKGROUND JOBS + MIDDLEWARE
+#  SECURITY MIDDLEWARE
 # ============================================================
-async def cleanup_expired_job(context):
-    now = datetime.now(); changed = False
-    for u in [k for k, v in list(state["WHITELIST_EXPIRY"].items()) if now > datetime.fromisoformat(v)]:
-        try: state["WHITELIST"].remove(int(u))
-        except: pass
-        state["WHITELIST_EXPIRY"].pop(u, None); changed = True
-    for u in [k for k, v in list(state.get("BANNED_TIMED", {}).items()) if now > datetime.fromisoformat(v)]:
-        try: state["BANNED"].remove(int(u))
-        except: pass
-        state["BANNED_TIMED"].pop(u, None); changed = True
-    for u in [k for k, v in list(state["MUTED"].items()) if now > datetime.fromisoformat(v)]:
-        state["MUTED"].pop(u, None); changed = True
-    if changed: save_state()
-
-
-async def monitor_check_job(context):
-    for m in MONITORS:
-        try:
-            r = requests.get(m["url"], timeout=15)
-            new_status = r.status_code
-            if m.get("last_status") and m["last_status"] != new_status:
-                try:
-                    await context.bot.send_message(m["chat_id"], f"📡 <b>{m['url']}</b>\nStatus: {m['last_status']} → {new_status}", parse_mode=ParseMode.HTML)
-                except: pass
-            m["last_status"] = new_status
-        except Exception:
-            m["last_status"] = "down"
-    if MONITORS: save_monitors()
-
-
-async def auto_backup_job(context):
-    try:
-        name = f"auto_backup_{datetime.now():%Y%m%d_%H%M}.zip"
-        with zipfile.ZipFile(name, "w") as z:
-            for f in ("main.py", "requirements.txt", "whitelist.json", "config.json"):
-                if os.path.exists(f): z.write(f)
-        await context.bot.send_document(OWNER_ID, document=open(name, "rb"), filename=name)
-        os.remove(name)
-    except Exception as e:
-        logger.exception(f"Backup: {e}")
-
-
-async def global_security_middleware(update, context):
+async def middleware(update, context):
     if not update.effective_user or not update.message: return
     uid = update.effective_user.id
-    suid = str(uid)
-    now = datetime.now()
+    if LOCKDOWN and uid != OWNER_ID: raise ApplicationHandlerStop
+    if SILENT_MODE and uid != OWNER_ID: raise ApplicationHandlerStop
+    if str(uid) in state["MUTED"]:
+        if datetime.now() > datetime.fromisoformat(state["MUTED"][str(uid)]):
+            state["MUTED"].pop(str(uid), None); save_state()
+        else: raise ApplicationHandlerStop
+    if uid in state["BANNED"]: raise ApplicationHandlerStop
 
-    if LOCKDOWN and uid != OWNER_ID:
-        raise ApplicationHandlerStop
-
-    if SILENT_MODE and uid != OWNER_ID:
-        raise ApplicationHandlerStop
-
-    if suid in state["MUTED"]:
-        if now > datetime.fromisoformat(state["MUTED"][suid]):
-            state["MUTED"].pop(suid, None); save_state()
-        else:
-            raise ApplicationHandlerStop
-
-    if uid in state["BANNED"]:
-        raise ApplicationHandlerStop
-
-    now_ts = time.time()
-    bucket = [x for x in FLOOD_WINDOW.get(uid, []) if now_ts - x < 60]
-    bucket.append(now_ts)
+    now = time.time()
+    bucket = [x for x in FLOOD_WINDOW.get(uid, []) if now - x < 60]
+    bucket.append(now)
     FLOOD_WINDOW[uid] = bucket
     if len(bucket) > 15 and uid != OWNER_ID:
-        try: await context.bot.send_message(OWNER_ID, t(OWNER_ID, "flood_detected", uid=uid), parse_mode=ParseMode.HTML)
-        except: pass
-        state["MUTED"][suid] = (datetime.now() + timedelta(minutes=5)).isoformat()
-        save_state(); raise ApplicationHandlerStop
+        state["MUTED"][str(uid)] = (datetime.now() + timedelta(minutes=5)).isoformat()
+        save_state()
+        raise ApplicationHandlerStop
 
     if uid != OWNER_ID and uid not in state["WHITELIST"]:
-        entry = {
-            "first_name": update.effective_user.first_name,
-            "last_name": update.effective_user.last_name,
-            "user_id": uid, "username": update.effective_user.username,
-            "chat_id": update.effective_chat.id, "timestamp": now.isoformat(),
-            "text_preview": (update.message.text or "[Media]")[:100],
-        }
+        entry = {"user_id": uid, "username": update.effective_user.username,
+                 "first_name": update.effective_user.first_name,
+                 "timestamp": datetime.now().isoformat()}
         logs = []
         if os.path.exists(INTRUDER_FILE):
             try:
-                with open(INTRUDER_FILE, "r", encoding="utf-8") as f: logs = json.load(f)
+                with open(INTRUDER_FILE) as f: logs = json.load(f)
             except: pass
         logs.append(entry)
-        _atomic_write_json(INTRUDER_FILE, logs)
-        alert = (
-            f"{t(OWNER_ID, 'unauthorized')}\n\n"
-            f"  ID    │ <code>{uid}</code>\n"
-            f"  User  │ @{entry['username']} ({entry['first_name']})\n"
-            f"  Chat  │ <code>{entry['chat_id']}</code>\n"
-            f"  Query │ {entry['text_preview']}"
-        )
-        try: await context.bot.send_message(OWNER_ID, alert, parse_mode=ParseMode.HTML)
+        _write_json(INTRUDER_FILE, logs)
+        try:
+            await context.bot.send_message(OWNER_ID,
+                f"🚨 <b>ДОСТУП</b>\n<code>{uid}</code> @{entry['username']}",
+                parse_mode=ParseMode.HTML)
         except: pass
         raise ApplicationHandlerStop
 
 
 # ============================================================
-#  FLASK + MAIN
+#  MAIN
 # ============================================================
-async def post_init(application: Application):
-    await application.bot.delete_webhook(drop_pending_updates=True)
-    logger.info("Webhooks cleared. J.A.R.V.I.S. Online. Boss: Silent / Tony Stark.")
+async def post_init(app):
+    await app.bot.delete_webhook(drop_pending_updates=True)
+    logger.info("J.A.R.V.I.S. Online. Boss: Silent.")
 
 
 def run_flask():
-    flask_app = Flask(__name__)
-    @flask_app.route("/")
-    @flask_app.route("/health")
-    def health(): return "J.A.R.V.I.S. is alive", 200
-    port = int(os.environ.get("PORT", 8080))
-    flask_app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+    a = Flask(__name__)
+    @a.route("/")
+    @a.route("/health")
+    def h(): return "J.A.R.V.I.S. alive", 200
+    a.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)), debug=False, use_reloader=False)
 
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).post_init(post_init).build()
-
-    app.add_handler(TypeHandler(Update, global_security_middleware), group=-1)
-    app.job_queue.run_repeating(cleanup_expired_job, interval=60)
-    app.job_queue.run_repeating(monitor_check_job, interval=300, first=30)
-    app.job_queue.run_repeating(auto_backup_job, interval=7*24*3600, first=10)
-
+    app.add_handler(TypeHandler(Update, middleware), group=-1)
     app.add_handler(CallbackQueryHandler(on_lang_callback, pattern=r"^lang_(ru|en)$"))
+    app.add_handler(CallbackQueryHandler(on_admin_callback, pattern=r"^adm_"))
 
     for cmd, fn in [
         ("start", start), ("help", help_cmd), ("reset", reset_cmd),
-        ("mode", mode_cmd), ("vibe", vibe_cmd), ("id", id_cmd),
-        ("lang", lang_cmd),
+        ("lang", lang_cmd), ("mode", mode_cmd), ("vibe", vibe_cmd), ("id", id_cmd),
         ("incognito", incognito_cmd), ("incognito_off", incognito_off_cmd),
     ]:
         app.add_handler(CommandHandler(cmd, fn))
 
     for cmd, fn in [
         ("draw", draw_cmd), ("qr", qr_cmd), ("tts", tts_cmd),
+        ("news", news_cmd), ("meme", meme_cmd), ("search", search_cmd),
+        ("wiki", wiki_cmd), ("translate", translate_cmd), ("weather", weather_cmd),
         ("poll", poll_cmd), ("quiz", quiz_cmd), ("speed", speed_cmd),
-        ("screenshot", screenshot_cmd), ("translate", translate_cmd),
-        ("summarize", summarize_cmd),
+        ("screenshot", screenshot_cmd), ("summarize", summarize_cmd),
     ]:
         app.add_handler(CommandHandler(cmd, fn))
 
-    app.add_handler(MessageHandler(filters.PHOTO,        photo_handler))
-    app.add_handler(MessageHandler(filters.Sticker.ALL,  sticker_handler))
-    app.add_handler(MessageHandler(filters.VOICE,        voice_handler))
+    app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
+    app.add_handler(MessageHandler(filters.Sticker.ALL, sticker_handler))
+    app.add_handler(MessageHandler(filters.VOICE, voice_handler))
     app.add_handler(MessageHandler(filters.VIDEO | filters.VIDEO_NOTE, video_handler))
-    app.add_handler(MessageHandler(filters.ANIMATION,    animation_handler))
+    app.add_handler(MessageHandler(filters.ANIMATION, animation_handler))
     app.add_handler(MessageHandler(filters.Document.ALL, document_handler))
 
-    # Module B
-    for cmd, fn in [
-        ("calc", calc_cmd), ("currency", currency_cmd), ("weather", weather_cmd),
-        ("time", time_cmd), ("timer", timer_cmd), ("remind", remind_cmd),
-        ("todo", todo_cmd), ("password", password_cmd), ("uuid", uuid_cmd),
-        ("convert", convert_cmd), ("bmi", bmi_cmd),
-    ]:
-        app.add_handler(CommandHandler(cmd, fn))
-
-    # Module C
-    for cmd, fn in [
-        ("improve", improve_cmd), ("fix", fix_cmd), ("shorten", shorten_cmd),
-        ("expand", expand_cmd), ("style", style_cmd), ("keywords", keywords_cmd),
-        ("theses", theses_cmd), ("tone", tone_cmd),
-    ]:
-        app.add_handler(CommandHandler(cmd, fn))
-
-    # Module D
-    for cmd, fn in [
-        ("upscale", upscale_cmd), ("compress", compress_cmd), ("sticker", sticker_cmd),
-        ("ocr", ocr_cmd), ("colors", colors_cmd), ("exif", exif_cmd),
-    ]:
-        app.add_handler(CommandHandler(cmd, fn))
-
-    # Module E
-    for cmd, fn in [
-        ("invite", invite_cmd), ("redeem", redeem_cmd), ("intruders", intruders_cmd),
-        ("prune", prune_cmd), ("silent", silent_cmd), ("announce", announce_cmd),
-        ("lockdown", lockdown_cmd),
-    ]:
-        app.add_handler(CommandHandler(cmd, fn))
-
-    # Module F
-    for cmd, fn in [
-        ("diff", diff_cmd), ("commit", commit_cmd), ("dockerfile", dockerfile_cmd),
-        ("gitignore", gitignore_cmd), ("json", json_cmd), ("b64", b64_cmd),
-        ("hash", hash_cmd), ("cron", cron_cmd), ("jwt", jwt_cmd), ("urlenc", urlenc_cmd),
-    ]:
-        app.add_handler(CommandHandler(cmd, fn))
-
-    # Module G
-    for cmd, fn in [
-        ("diary", diary_cmd), ("secret", secret_cmd), ("task", task_cmd),
-        ("habit", habit_cmd), ("money", money_cmd),
-    ]:
-        app.add_handler(CommandHandler(cmd, fn))
-
-    # Module H
-    for cmd, fn in [("monitor", monitor_cmd), ("rss", rss_cmd)]:
-        app.add_handler(CommandHandler(cmd, fn))
-
-    # Module I
-    for cmd, fn in [("gif", gif_cmd), ("meme", meme_cmd), ("horoscope", horoscope_cmd), ("recipe", recipe_cmd)]:
-        app.add_handler(CommandHandler(cmd, fn))
-
-    # Phase 3
-    for cmd, fn in [
-        ("admin", admin_panel), ("add", add_whitelist), ("remove", remove_whitelist),
-        ("whitelist", whitelist_list), ("ban", ban_user), ("unban", unban_user),
-        ("mute", mute_user), ("warn", warn_user), ("warnings", warnings_list),
-        ("broadcast", broadcast_msg), ("send", send_direct), ("backup", backup_cmd),
-        ("logs", logs_cmd), ("export_logs", export_logs_cmd),
-    ]:
-        app.add_handler(CommandHandler(cmd, fn))
-
-    app.add_handler(MessageHandler(
-        filters.Regex(r"^(👥 Whitelist|🚫 Bans|📊 Logs|📢 Broadcast|💾 Backup|ℹ️ Status|👥 Белый список|🚫 Баны|📊 Логи|📢 Рассылка|💾 Бэкап|ℹ️ Статус)$"),
-        admin_buttons))
-
-    # Phase 4
+    # AI Pro
     for cmd, fn in [
         ("review", review_cmd), ("regex", regex_cmd), ("sql", sql_cmd),
         ("explain", explain_cmd), ("refactor", refactor_cmd), ("uml", uml_cmd),
@@ -2327,21 +1895,56 @@ def main():
     ]:
         app.add_handler(CommandHandler(cmd, fn))
 
-    # Phase 5
+    # Text tools
     for cmd, fn in [
-        ("export_whitelist", export_whitelist_cmd), ("clear_session", clear_session_cmd),
+        ("improve", improve_cmd), ("fix", fix_cmd), ("shorten", shorten_cmd),
+        ("expand", expand_cmd), ("keywords", keywords_cmd), ("theses", theses_cmd),
+        ("style", style_cmd), ("tone", tone_cmd),
+    ]:
+        app.add_handler(CommandHandler(cmd, fn))
+
+    # Image tools
+    for cmd, fn in [
+        ("upscale", upscale_cmd), ("compress", compress_cmd), ("sticker", sticker_cmd),
+        ("ocr", ocr_cmd), ("colors", colors_cmd), ("exif", exif_cmd),
+    ]:
+        app.add_handler(CommandHandler(cmd, fn))
+
+    # Personal
+    for cmd, fn in [
+        ("diary", diary_cmd), ("secret", secret_cmd), ("task", task_cmd),
+        ("habit", habit_cmd), ("money", money_cmd),
+    ]:
+        app.add_handler(CommandHandler(cmd, fn))
+
+    # Dev
+    for cmd, fn in [
+        ("diff", diff_cmd), ("commit", commit_cmd), ("dockerfile", dockerfile_cmd),
+        ("gitignore", gitignore_cmd), ("json", json_cmd), ("b64", b64_cmd),
+        ("hash", hash_cmd), ("cron", cron_cmd),
+    ]:
+        app.add_handler(CommandHandler(cmd, fn))
+
+    # Admin
+    for cmd, fn in [
+        ("admin", admin_panel), ("add", add_whitelist), ("remove", remove_whitelist),
+        ("whitelist", whitelist_list), ("ban", ban_user), ("unban", unban_user),
+        ("mute", mute_user), ("warn", warn_user), ("warnings", warnings_list),
+        ("broadcast", broadcast_msg), ("backup", backup_cmd), ("logs", logs_cmd),
+        ("silent", silent_cmd), ("lockdown", lockdown_cmd),
+        ("stats", stats_cmd), ("health", health_cmd),
         ("report", report_cmd), ("tickets", tickets_cmd), ("close_ticket", close_ticket_cmd),
-        ("stats", stats_cmd), ("health", health_cmd), ("stopwords", stopwords_cmd),
+        ("intruders", intruders_cmd), ("prune", prune_cmd),
+        ("export_whitelist", export_whitelist_cmd), ("clear_session", clear_session_cmd),
+        ("stopwords", stopwords_cmd),
     ]:
         app.add_handler(CommandHandler(cmd, fn))
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
-
-    logger.info("Starting polling...")
+    logger.info("Polling...")
     app.run_polling(drop_pending_updates=True)
 
 
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
-    logger.info("Flask keepalive started.")
     main()
