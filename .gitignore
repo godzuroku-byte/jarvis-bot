@@ -11,4 +11,8 @@ whitelist_export.json
 safe_config.json
 jarvis_backup.zip
 auto_backup_*.zip
-replit.nix
+replit.nix.venv/
+venv/
+*.log
+*.tmp
+tmp_*

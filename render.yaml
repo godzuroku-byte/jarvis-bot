@@ -11,7 +11,11 @@ services:
       - key: GEMINI_API_KEY
         sync: false
       - key: OWNER_ID
-        value: "8988340808"
+        sync: false
       - key: GEMINI_MODEL
-        value: "gemini-2.0-flash"
+        value: "gemini-3.8-flash"
+      - key: GEMINI_FALLBACK_MODELS
+        value: "gemini-3.7-flash,gemini-2.5-flash"
+      - key: GEMINI_TIMEOUT_SECONDS
+        value: "60"
     autoDeploy: true

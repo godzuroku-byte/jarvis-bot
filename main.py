@@ -6,6 +6,7 @@ All essential commands | ru+en | Boss: Silent / Tony Stark
 
 import os
 import io
+import asyncio
 import re
 import json
 import time
@@ -15,6 +16,8 @@ import hashlib
 import zipfile
 import logging
 import threading
+from functools import wraps
+from html import escape as html_escape
 import urllib.parse
 import uuid as uuid_lib
 from datetime import datetime, timedelta
@@ -77,7 +80,16 @@ USERDATA_FILE = "userdata.json"
 
 BOT_TOKEN      = os.environ.get("BOT_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-GEMINI_MODEL   = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+GEMINI_MODEL   = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash").strip()
+GEMINI_FALLBACK_MODELS = [
+    model.strip() for model in os.environ.get(
+        "GEMINI_FALLBACK_MODELS", "gemini-3.7-flash,gemini-2.5-flash"
+    ).split(",") if model.strip()
+]
+try:
+    GEMINI_TIMEOUT_SECONDS = max(10, min(120, int(os.environ.get("GEMINI_TIMEOUT_SECONDS", "60"))))
+except (TypeError, ValueError):
+    GEMINI_TIMEOUT_SECONDS = 60
 ENV_OWNER_ID   = int(os.environ.get("OWNER_ID", "0"))
 
 CF_ACCOUNT_ID = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
@@ -103,8 +115,14 @@ if not os.path.exists(CONFIG_FILE):
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump({"OWNER_ID": OWNER_ID, "MODEL": GEMINI_MODEL}, f, indent=4)
 
-with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-    config = json.load(f)
+try:
+    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+        config = json.load(f)
+    if not isinstance(config, dict):
+        config = {}
+except (OSError, json.JSONDecodeError) as exc:
+    logger.warning("Could not read %s; using defaults: %s", CONFIG_FILE, exc)
+    config = {}
 
 
 # ============================================================
@@ -176,7 +194,7 @@ TEXTS = {
         "lang_switched": "🌐 Язык: <b>{lang}</b>",
         "processing":    "🧠 <i>Обработка…</i>",
         "slow_down":     "⏳ Помедленнее, сэр.",
-        "gemini_down":   "⚠️ Нейронная сеть недоступна.",
+        "gemini_down":   "⚠️ ИИ временно недоступен. Владелец может проверить подключение командой /diagnostics.",
         "req_error":     "⚠️ Ошибка.",
         "memory_cleared":"🧹 Память очищена.",
         "incog_on":      "🕶 Инкогнито ВКЛ.",
@@ -207,7 +225,7 @@ TEXTS = {
         "lang_switched": "🌐 Language: <b>{lang}</b>",
         "processing":    "🧠 <i>Processing…</i>",
         "slow_down":     "⏳ Slow down, Sir.",
-        "gemini_down":   "⚠️ Neural matrix unavailable.",
+        "gemini_down":   "⚠️ AI is temporarily unavailable. The owner can check the connection with /diagnostics.",
         "req_error":     "⚠️ Error.",
         "memory_cleared":"🧹 Memory cleared.",
         "incog_on":      "🕶 Incognito ON.",
@@ -339,6 +357,7 @@ def track_usage(uid):
 
 
 def owner_only(func):
+    @wraps(func)
     async def wrapper(update, context, *a, **kw):
         if update.effective_user.id != OWNER_ID:
             await update.message.reply_text(t(update.effective_user.id, "owner_only"))
@@ -383,59 +402,185 @@ def system_prompt(uid):
     return base + vibes.get(vibe, "") + modes.get(USER_MODES.get(uid, "assistant"), "")
 
 
-async def call_gemini(prompt, uid, system_instruction=None, media_parts=None, json_mode=False):
-    if not ai_client: return t(uid, "gemini_down")
+GEMINI_SEMAPHORE = asyncio.Semaphore(4)
+GEMINI_LAST_MODEL = None
+GEMINI_LAST_OK_AT = None
+GEMINI_LAST_ERROR = None
+GEMINI_LAST_ERROR_AT = None
+
+
+def _model_candidates():
+    """Return configured model first, followed by unique fallback models."""
+    candidates = []
+    for name in [GEMINI_MODEL, *GEMINI_FALLBACK_MODELS]:
+        name = (name or "").strip()
+        if name and name not in candidates:
+            candidates.append(name)
+    return candidates
+
+
+def _safe_error_text(exc):
+    """Keep diagnostics useful without leaking credentials or huge tracebacks."""
+    message = f"{type(exc).__name__}: {exc}"
+    if GEMINI_API_KEY:
+        message = message.replace(GEMINI_API_KEY, "[REDACTED]")
+    message = re.sub(r"(?i)(key|token|authorization)\s*[:=]\s*[^\s,;]+", r"\1=[REDACTED]", message)
+    return message[:500]
+
+
+def _history_to_contents(uid):
+    contents = []
+    if uid in INCOGNITO:
+        return contents
+    for item in USER_HISTORY.get(uid, []):
+        try:
+            role = item.get("role")
+            text = item.get("parts", [{}])[0].get("text", "")
+            if role in ("user", "model") and isinstance(text, str) and text:
+                contents.append(types.Content(
+                    role=role, parts=[types.Part.from_text(text=text)]
+                ))
+        except (AttributeError, IndexError, TypeError, KeyError):
+            logger.warning("Skipped malformed history item for user %s", uid)
+    return contents
+
+
+async def _generate_with_fallback(contents, system_instruction=None, json_mode=False):
+    """Try the configured Gemini model and then configured fallback models."""
+    global GEMINI_LAST_MODEL, GEMINI_LAST_OK_AT, GEMINI_LAST_ERROR, GEMINI_LAST_ERROR_AT
+    if not ai_client:
+        GEMINI_LAST_ERROR = "Gemini client failed to initialize; check GEMINI_API_KEY and startup logs."
+        GEMINI_LAST_ERROR_AT = datetime.now().isoformat()
+        return None
+
+    config = {}
+    if system_instruction:
+        config["system_instruction"] = system_instruction
+    if json_mode:
+        config["response_mime_type"] = "application/json"
+    gen_config = types.GenerateContentConfig(**config) if config else None
+    last_error = None
+
+    async with GEMINI_SEMAPHORE:
+        for model_name in _model_candidates():
+            try:
+                kwargs = {"model": model_name, "contents": contents}
+                if gen_config is not None:
+                    kwargs["config"] = gen_config
+                response = await asyncio.wait_for(
+                    ai_client.aio.models.generate_content(**kwargs),
+                    timeout=GEMINI_TIMEOUT_SECONDS,
+                )
+                try:
+                    response_text = response.text
+                except Exception:
+                    response_text = None
+                if not response_text or not response_text.strip():
+                    raise RuntimeError("Gemini returned an empty response (possibly safety-filtered).")
+                GEMINI_LAST_MODEL = model_name
+                GEMINI_LAST_OK_AT = datetime.now().isoformat(timespec="seconds")
+                GEMINI_LAST_ERROR = None
+                GEMINI_LAST_ERROR_AT = None
+                if model_name != GEMINI_MODEL:
+                    logger.warning("Gemini fallback model succeeded: %s (configured: %s)", model_name, GEMINI_MODEL)
+                return response_text
+            except Exception as exc:
+                last_error = exc
+                GEMINI_LAST_ERROR = _safe_error_text(exc)
+                GEMINI_LAST_ERROR_AT = datetime.now().isoformat(timespec="seconds")
+                logger.warning("Gemini request failed for model %s: %s", model_name, _safe_error_text(exc))
+                error_text = str(exc).lower()
+                if any(marker in error_text for marker in (
+                    "api key not valid", "invalid api key", "api_key_invalid",
+                    "unauthenticated", "authentication failed",
+                )):
+                    break
+
+    if last_error is not None:
+        logger.error("All Gemini model attempts failed. Last error: %s", _safe_error_text(last_error))
+    return None
+
+
+async def call_gemini(prompt, uid, system_instruction=None, media_parts=None,
+                      json_mode=False, store_history=True):
+    global GEMINI_LAST_ERROR, GEMINI_LAST_ERROR_AT
+    if not ai_client:
+        GEMINI_LAST_ERROR = "Gemini client failed to initialize; check GEMINI_API_KEY and startup logs."
+        GEMINI_LAST_ERROR_AT = datetime.now().isoformat(timespec="seconds")
+        return t(uid, "gemini_down")
+
     try:
         sys_inst = system_instruction or system_prompt(uid)
-        contents = []
-        if uid not in INCOGNITO and uid in USER_HISTORY:
-            for m in USER_HISTORY[uid]:
-                contents.append(types.Content(role=m["role"], parts=[types.Part.from_text(text=m["parts"][0]["text"])]))
+        contents = _history_to_contents(uid) if store_history else []
         parts = list(media_parts or [])
-        parts.append(types.Part.from_text(text=prompt))
+        parts.append(types.Part.from_text(text=prompt or ""))
         contents.append(types.Content(role="user", parts=parts))
 
-        cfg = {"system_instruction": sys_inst}
-        if json_mode: cfg["response_mime_type"] = "application/json"
-        gen_cfg = types.GenerateContentConfig(**cfg)
-        resp = ai_client.models.generate_content(model=GEMINI_MODEL, contents=contents, config=gen_cfg)
-        res = resp.text or t(uid, "gemini_down")
+        res = await _generate_with_fallback(
+            contents, system_instruction=sys_inst, json_mode=json_mode
+        )
+        if not res:
+            return t(uid, "gemini_down")
 
-        if uid not in INCOGNITO and not media_parts and not json_mode:
+        if store_history and uid not in INCOGNITO and not media_parts and not json_mode:
             hist = USER_HISTORY.setdefault(uid, [])
-            hist.append({"role": "user",  "parts": [{"text": prompt}]})
-            hist.append({"role": "model", "parts": [{"text": res}]})
+            hist.extend([
+                {"role": "user", "parts": [{"text": prompt}]},
+                {"role": "model", "parts": [{"text": res}]},
+            ])
             if len(hist) > 20:
                 try:
-                    sc = contents.copy()
-                    sc.append(types.Content(role="user", parts=[types.Part.from_text(text="Summarize preserving facts.")]))
-                    summ = ai_client.models.generate_content(model=GEMINI_MODEL, contents=sc)
-                    USER_HISTORY[uid] = [
-                        {"role": "user",  "parts": [{"text": "Previous summary."}]},
-                        {"role": "model", "parts": [{"text": summ.text}]},
-                    ]
-                except Exception:
+                    summary_contents = list(contents)
+                    summary_contents.append(types.Content(
+                        role="user",
+                        parts=[types.Part.from_text(text="Summarize the conversation, preserving important facts and preferences.")],
+                    ))
+                    summary = await _generate_with_fallback(
+                        summary_contents,
+                        system_instruction="Summarize the conversation accurately and concisely.",
+                    )
+                    if summary:
+                        USER_HISTORY[uid] = [
+                            {"role": "user", "parts": [{"text": "Previous conversation summary."}]},
+                            {"role": "model", "parts": [{"text": summary}]},
+                        ]
+                    else:
+                        USER_HISTORY[uid] = hist[-10:]
+                except Exception as exc:
+                    logger.warning("Conversation summarization failed: %s", _safe_error_text(exc))
                     USER_HISTORY[uid] = hist[-10:]
             save_history(uid)
         return res
-    except Exception as e:
-        logger.exception(f"Gemini: {e}")
+    except Exception as exc:
+        logger.exception("Gemini request pipeline failed: %s", _safe_error_text(exc))
+        GEMINI_LAST_ERROR = _safe_error_text(exc)
+        GEMINI_LAST_ERROR_AT = datetime.now().isoformat(timespec="seconds")
         return t(uid, "gemini_down")
 
 
 async def upload_media_to_gemini(data: bytes, mime: str, uid: int):
-    try:
-        ext = {"video/mp4": ".mp4", "audio/ogg": ".ogg", "audio/mp3": ".mp3",
-               "video/quicktime": ".mov"}.get(mime, ".bin")
-        tmp_path = f"tmp_{uid}_{int(time.time())}_{random.randint(0,9999)}{ext}"
-        with open(tmp_path, "wb") as f:
-            f.write(data)
-        uploaded = ai_client.files.upload(file=tmp_path)
-        os.remove(tmp_path)
-        return types.Part.from_uri(file_uri=uploaded.uri, mime_type=uploaded.mime_type)
-    except Exception as e:
-        logger.error(f"File API failed: {e}, fallback inline")
+    """Upload large media without blocking the Telegram event loop; always clean up temp files."""
+    if not ai_client:
         return types.Part.from_bytes(data=data, mime_type=mime)
+    ext = {
+        "video/mp4": ".mp4", "audio/ogg": ".ogg", "audio/mp3": ".mp3",
+        "audio/mpeg": ".mp3", "video/quicktime": ".mov",
+    }.get(mime, ".bin")
+    tmp_path = f"tmp_{uid}_{uuid_lib.uuid4().hex}{ext}"
+    try:
+        with open(tmp_path, "wb") as file:
+            file.write(data)
+        uploaded = await asyncio.to_thread(ai_client.files.upload, file=tmp_path)
+        return types.Part.from_uri(file_uri=uploaded.uri, mime_type=uploaded.mime_type)
+    except Exception as exc:
+        logger.warning("Gemini media upload failed; using inline data: %s", _safe_error_text(exc))
+        return types.Part.from_bytes(data=data, mime_type=mime)
+    finally:
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except OSError as exc:
+            logger.warning("Could not remove temporary media file: %s", exc)
 
 
 # ============================================================
@@ -595,7 +740,7 @@ async def help_cmd(update, context):
         "  • " + ("«покажи мем» → пришлю мем" if ru else "«show meme» → meme"),
         "",
         "📋 <b>" + ("Основные команды:" if ru else "Main commands:") + "</b>",
-        "/start /help /reset /lang /mode /vibe /id",
+        "/start /help /reset /lang /mode /vibe /id /ping",
         "/draw /qr /tts /translate /summarize /speed /screenshot /poll /quiz",
         "/news /meme /search /wiki /weather",
         "/admin — " + ("панель босса" if ru else "boss panel"),
@@ -606,7 +751,9 @@ async def help_cmd(update, context):
         "🗂 <b>" + ("Личное:" if ru else "Personal:") + "</b> /diary /secret /task /habit /money",
         "🛠 <b>Dev:</b> /diff /commit /dockerfile /gitignore /json /b64 /hash /cron",
         "🛡 <b>" + ("Модерация:" if ru else "Moderation:") + "</b> /mute /warn /warnings /ban /unban /add /remove",
-        "⚙️ <b>" + ("Прочее:" if ru else "Misc:") + "</b> /stats /health /report /tickets /close_ticket /intruders /prune",
+         "⚙️ <b>" + ("Прочее:" if ru else "Misc:") + "</b> /stats /health /report /tickets /close_ticket /intruders /prune",
+        ("🧠 <b>Диагностика ИИ:</b> /model /diagnostics (только владелец)" if ru
+         else "🧠 <b>AI diagnostics:</b> /model /diagnostics (owner only)"),
         "  /export_whitelist /clear_session /stopwords",
         "",
         "🎩 " + ("Всё остальное — просто спроси словами." if ru else "Anything else — just ask."),
@@ -666,7 +813,7 @@ async def id_cmd(update, context):
     name = update.effective_user.first_name or "—"
     if update.effective_user.username:
         name += f" (@{update.effective_user.username})"
-    await update.message.reply_text(t(uid, "your_id", uid=uid, name=name), parse_mode=ParseMode.HTML)
+    await update.message.reply_text(t(uid, "your_id", uid=uid, name=html_escape(name)), parse_mode=ParseMode.HTML)
 
 
 async def incognito_cmd(update, context):
@@ -768,11 +915,11 @@ async def draw_cmd(update, context):
         out = io.BytesIO()
         img.save(out, format="JPEG", quality=90)
         out.seek(0)
-        await update.message.reply_photo(photo=out, caption=f"🎨 <i>{desc[:100]}</i>", parse_mode=ParseMode.HTML)
+        await update.message.reply_photo(photo=out, caption=f"🎨 <i>{html_escape(desc[:100])}</i>", parse_mode=ParseMode.HTML)
         await status.delete()
     except Exception as e:
         logger.exception(f"Draw: {e}")
-        await status.edit_text(f"⚠️ Сбой, сэр.\n<i>{str(e)[:200]}</i>", parse_mode=ParseMode.HTML)
+        await status.edit_text(f"⚠️ Сбой, сэр.\n<i>{html_escape(str(e)[:200])}</i>", parse_mode=ParseMode.HTML)
 
 
 async def qr_cmd(update, context):
@@ -1468,7 +1615,7 @@ async def secret_cmd(update, context):
     elif sub == "get" and len(context.args) == 2:
         v = sec.get(context.args[1])
         if v:
-            await update.message.reply_text(f"<code>{base64.b64decode(v.encode()).decode()}</code>", parse_mode=ParseMode.HTML)
+            await update.message.reply_text(f"<code>{html_escape(base64.b64decode(v.encode()).decode())}</code>", parse_mode=ParseMode.HTML)
         else:
             await update.message.reply_text("❌")
     elif sub == "list":
@@ -1584,14 +1731,14 @@ async def dockerfile_cmd(update, context):
     uid = update.effective_user.id
     topic = " ".join(context.args) or "python app"
     reply = await call_gemini(f"Multi-stage Dockerfile for: {topic}. Return only Dockerfile.", uid)
-    await update.message.reply_text(f"<pre>{reply[:3800]}</pre>", parse_mode=ParseMode.HTML)
+    await update.message.reply_text(f"<pre>{html_escape(reply[:3800])}</pre>", parse_mode=ParseMode.HTML)
 
 
 async def gitignore_cmd(update, context):
     uid = update.effective_user.id
     lang = context.args[0] if context.args else "python"
     reply = await call_gemini(f"Standard .gitignore for {lang}. Return only contents.", uid)
-    await update.message.reply_text(f"<pre>{reply[:3800]}</pre>", parse_mode=ParseMode.HTML)
+    await update.message.reply_text(f"<pre>{html_escape(reply[:3800])}</pre>", parse_mode=ParseMode.HTML)
 
 
 async def json_cmd(update, context):
@@ -1602,7 +1749,7 @@ async def json_cmd(update, context):
         return
     try:
         pretty = json.dumps(json.loads(text), indent=2, ensure_ascii=False)
-        await update.message.reply_text(f"<pre>{pretty[:3800]}</pre>", parse_mode=ParseMode.HTML)
+        await update.message.reply_text(f"<pre>{html_escape(pretty[:3800])}</pre>", parse_mode=ParseMode.HTML)
     except Exception as e:
         await update.message.reply_text(f"❌ {e}")
 
@@ -1614,7 +1761,7 @@ async def b64_cmd(update, context):
     mode, text = context.args[0].lower(), " ".join(context.args[1:])
     try:
         out = base64.b64encode(text.encode()).decode() if mode == "encode" else base64.b64decode(text.encode()).decode()
-        await update.message.reply_text(f"<code>{out}</code>", parse_mode=ParseMode.HTML)
+        await update.message.reply_text(f"<code>{html_escape(out)}</code>", parse_mode=ParseMode.HTML)
     except Exception as e:
         await update.message.reply_text(f"❌ {e}")
 
@@ -1675,7 +1822,7 @@ async def on_admin_callback(update, context):
     data = q.data
     if data == "adm_status":
         try:
-            cpu = psutil.cpu_percent(interval=0.3)
+            cpu = await asyncio.to_thread(psutil.cpu_percent, interval=0.3)
             ram = psutil.virtual_memory().percent
             dsk = psutil.disk_usage("/").percent
             up = int(time.time() - STARTED_AT)
@@ -1878,7 +2025,7 @@ async def broadcast_msg(update, context):
     sent = failed = 0
     for u in state["WHITELIST"]:
         try:
-            await context.bot.send_message(u, f"📢 <b>Broadcast</b>\n\n{text}", parse_mode=ParseMode.HTML)
+            await context.bot.send_message(u, f"📢 <b>Broadcast</b>\n\n{html_escape(text)}", parse_mode=ParseMode.HTML)
             sent += 1
         except Exception:
             failed += 1
@@ -1901,7 +2048,7 @@ async def logs_cmd(update, context):
     if os.path.exists("bot.log"):
         with open("bot.log", "r", encoding="utf-8") as f:
             tail = "".join(f.readlines()[-35:])[-4000:]
-        await update.message.reply_text(f"<pre>{tail}</pre>", parse_mode=ParseMode.HTML)
+        await update.message.reply_text(f"<pre>{html_escape(tail)}</pre>", parse_mode=ParseMode.HTML)
 
 
 @owner_only
@@ -1936,7 +2083,7 @@ async def stats_cmd(update, context):
 @owner_only
 async def health_cmd(update, context):
     try:
-        cpu = psutil.cpu_percent(interval=0.5)
+        cpu = await asyncio.to_thread(psutil.cpu_percent, interval=0.5)
         ram = psutil.virtual_memory().percent
         dsk = psutil.disk_usage("/").percent
         up = int(time.time() - STARTED_AT)
@@ -1946,6 +2093,82 @@ async def health_cmd(update, context):
             parse_mode=ParseMode.HTML)
     except Exception as e:
         await update.message.reply_text(f"⚠️ {e}")
+
+
+async def ping_cmd(update, context):
+    """Quick check that the Telegram bot process is responding."""
+    started = time.perf_counter()
+    message = await update.message.reply_text("🏓 Pong — checking response time…")
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    await message.edit_text(f"🏓 Pong. Telegram response: {elapsed_ms:.0f} ms.")
+
+
+@owner_only
+async def model_cmd(update, context):
+    candidates = ", ".join(_model_candidates())
+    active = GEMINI_LAST_MODEL or ("ещё не проверялась" if LANG.get(str(update.effective_user.id), "en") == "ru" else "not tested yet")
+    if LANG.get(str(update.effective_user.id), "en") == "ru":
+        message = (
+            f"🧠 Настройки Gemini\nОсновная модель: {GEMINI_MODEL}\n"
+            f"Последняя рабочая: {active}\nКандидаты: {candidates}\n"
+            f"Тайм-аут: {GEMINI_TIMEOUT_SECONDS} с"
+        )
+    else:
+        message = (
+            f"🧠 Gemini configuration\nConfigured: {GEMINI_MODEL}\n"
+            f"Last successful: {active}\nFallbacks: {candidates}\n"
+            f"Timeout: {GEMINI_TIMEOUT_SECONDS}s"
+        )
+    await update.message.reply_text(message)
+
+
+@owner_only
+async def diagnostics_cmd(update, context):
+    """Perform a real, minimal Gemini API request and show owner-only diagnostics."""
+    uid = update.effective_user.id
+    ru = LANG.get(str(uid), "en") == "ru"
+    await update.message.reply_text(
+        "🔎 Проверяю подключение к Gemini…" if ru
+        else "🔎 Running a short Gemini connection test…"
+    )
+    result = await call_gemini(
+        "Reply with exactly: OK",
+        uid,
+        system_instruction="This is a connectivity test. Reply with exactly OK.",
+        store_history=False,
+    )
+    if result and result != t(uid, "gemini_down"):
+        if ru:
+            message = (
+                f"✅ Gemini отвечает.\nМодель: {GEMINI_LAST_MODEL or GEMINI_MODEL}\n"
+                f"Последний успех: {GEMINI_LAST_OK_AT or 'только что'}\nОтвет: {result[:100]}"
+            )
+        else:
+            message = (
+                f"✅ Gemini API is responding.\nModel: {GEMINI_LAST_MODEL or GEMINI_MODEL}\n"
+                f"Last success: {GEMINI_LAST_OK_AT or 'just now'}\nResponse: {result[:100]}"
+            )
+        await update.message.reply_text(message)
+    else:
+        error = GEMINI_LAST_ERROR or (
+            "Подробности отсутствуют. Проверьте логи деплоя."
+            if ru else "No error details were returned. Check deployment logs."
+        )
+        if ru:
+            message = (
+                f"❌ Тест Gemini не пройден.\nОсновная модель: {GEMINI_MODEL}\n"
+                f"Резервные модели: {', '.join(GEMINI_FALLBACK_MODELS) or 'нет'}\n"
+                f"Причина: {error[:700]}\n\n"
+                "Проверьте GEMINI_API_KEY, доступ к API, квоты и логи деплоя."
+            )
+        else:
+            message = (
+                f"❌ Gemini test failed.\nConfigured model: {GEMINI_MODEL}\n"
+                f"Fallbacks: {', '.join(GEMINI_FALLBACK_MODELS) or 'none'}\n"
+                f"Reason: {error[:700]}\n\n"
+                "Check GEMINI_API_KEY, API access/billing, and the deployment logs."
+            )
+        await update.message.reply_text(message)
 
 
 async def report_cmd(update, context):
@@ -2160,6 +2383,7 @@ def main():
     for cmd, fn in [
         ("start", start), ("help", help_cmd), ("reset", reset_cmd),
         ("lang", lang_cmd), ("mode", mode_cmd), ("vibe", vibe_cmd), ("id", id_cmd),
+        ("ping", ping_cmd), ("model", model_cmd), ("diagnostics", diagnostics_cmd),
         ("incognito", incognito_cmd), ("incognito_off", incognito_off_cmd),
     ]:
         app.add_handler(CommandHandler(cmd, fn))
